@@ -9,6 +9,11 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
+    env:
+      # ✅ 强制整个 job 都用 Java17（关键！）
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +34,9 @@ jobs:
             libtinfo5 cmake libffi-dev libssl-dev \
             build-essential
 
-          # 显示 Java 版本（用于排查）
+          # ✅ 把 Java17 固定到 PATH（让后面所有工具都吃到）
+          echo "$JAVA_HOME/bin" >> $GITHUB_PATH
+
           java -version
           javac -version
 
@@ -41,23 +48,18 @@ jobs:
       - name: Prepare Android SDK/NDK (download only)
         working-directory: fitness_app
         run: |
-          # 先触发 buildozer 下载/初始化 SDK/NDK（即使失败也继续）
           buildozer android debug || true
 
       - name: Install cmdline-tools + accept licenses + install build-tools
         run: |
           set -e
-
-          # ✅ 强制本 step 使用 Java 17（解决 class file 61/55）
-          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
-          export PATH="$JAVA_HOME/bin:$PATH"
+          echo "JAVA_HOME=$JAVA_HOME"
           java -version
 
-          SDKROOT="$HOME/.buildozer/android/platform/android-sdk"
+          SDKROOT="$ANDROID_SDK_ROOT"
           echo "SDKROOT=$SDKROOT"
           mkdir -p "$SDKROOT"
 
-          # 下载 Google 官方 cmdline-tools（提供 sdkmanager）
           TMPDIR="$(mktemp -d)"
           cd "$TMPDIR"
           curl -L -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
@@ -69,15 +71,15 @@ jobs:
           SDKMAN="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
           echo "Using sdkmanager: $SDKMAN"
 
-          # 接受许可证（非交互）
           yes | "$SDKMAN" --sdk_root="$SDKROOT" --licenses
-
-          # 安装 platform-tools / platforms / build-tools（含 aidl）
           "$SDKMAN" --sdk_root="$SDKROOT" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
       - name: Build APK (debug)
         working-directory: fitness_app
         run: |
+          # 再确认一次 build 阶段也在用 Java17
+          echo "JAVA_HOME=$JAVA_HOME"
+          java -version
           buildozer -v android debug
 
       - name: Upload APK artifact
