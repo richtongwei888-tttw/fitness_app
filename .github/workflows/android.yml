@@ -13,24 +13,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache buildozer & gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.buildozer
-            ~/.gradle
-          key: ${{ runner.os }}-buildozer-${{ hashFiles('fitness_app/buildozer.spec') }}
-          restore-keys: |
-            ${{ runner.os }}-buildozer-
-
       - name: Build with Buildozer
-        uses: buildozer/buildozer-action@v1
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
         with:
-          command: buildozer -v android debug
           workdir: fitness_app
+          buildozer_version: stable
+          command: buildozer android debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: fitness_app/bin/*.apk
+          path: ${{ steps.buildozer.outputs.filename }}
