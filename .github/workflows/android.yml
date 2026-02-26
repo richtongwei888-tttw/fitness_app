@@ -26,7 +26,7 @@ jobs:
             autoconf libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev \
             libtinfo5 cmake libffi-dev libssl-dev \
-            build-essential
+            build-essential curl
 
       - name: Install buildozer
         run: |
@@ -39,25 +39,30 @@ jobs:
           # 先触发 buildozer 下载/初始化 SDK/NDK（即使失败也继续）
           buildozer android debug || true
 
-      - name: Accept Android SDK licenses + install build-tools
+      - name: Install cmdline-tools + accept licenses + install build-tools
         run: |
           set -e
           SDKROOT="$HOME/.buildozer/android/platform/android-sdk"
           echo "SDKROOT=$SDKROOT"
+          mkdir -p "$SDKROOT"
 
-          # 找到 sdkmanager（不同版本路径略有差异）
-          if [ -x "$SDKROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            SDKMAN="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
-          else
-            SDKMAN="$SDKROOT/cmdline-tools/bin/sdkmanager"
-          fi
+          # 下载 Google 官方 cmdline-tools（提供 sdkmanager）
+          TMPDIR="$(mktemp -d)"
+          cd "$TMPDIR"
+          curl -L -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q cmdline-tools.zip
 
+          mkdir -p "$SDKROOT/cmdline-tools/latest"
+          cp -r cmdline-tools/* "$SDKROOT/cmdline-tools/latest/"
+
+          SDKMAN="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
           echo "Using sdkmanager: $SDKMAN"
 
-          yes | "$SDKMAN" --licenses
+          # 接受许可证
+          yes | "$SDKMAN" --sdk_root="$SDKROOT" --licenses
 
-          # 安装常用平台 & build-tools（含 aidl）
-          "$SDKMAN" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+          # 安装 platform-tools / platforms / build-tools（含 aidl）
+          "$SDKMAN" --sdk_root="$SDKROOT" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
       - name: Build APK (debug)
         working-directory: fitness_app
