@@ -20,7 +20,11 @@ from kivy.graphics import Color, Rectangle, RoundedRectangle
 from functools import partial
 
 # 注册字体（Windows）
-LabelBase.register(name='ChineseFont', fn_regular='C:/Windows/Fonts/msyh.ttc')
+import os
+from kivy.core.text import LabelBase
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LabelBase.register(name='ChineseFont', fn_regular=os.path.join(BASE_DIR, 'msyh.ttc'))
 FONT = "ChineseFont"
 
 # 手机比例窗口
@@ -585,3 +589,4 @@ class FitnessApp(App):
 
 if __name__ == "__main__":
     FitnessApp().run()
+
