@@ -18,20 +18,18 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install system deps + set Java 17
+      - name: Install system deps + Java 17
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-              git zip unzip openjdk-17-jdk \
-              autoconf libtool pkg-config \
-              zlib1g-dev libncurses5-dev libncursesw5-dev \
-              libtinfo5 cmake libffi-dev libssl-dev \
-              build-essential curl
+            git zip unzip curl \
+            openjdk-17-jdk \
+            autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev \
+            libtinfo5 cmake libffi-dev libssl-dev \
+            build-essential
 
-          # ✅ 强制切到 Java 17（解决 class file version 61 的报错）
-          sudo update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java
-          sudo update-alternatives --set javac /usr/lib/jvm/java-17-openjdk-amd64/bin/javac
-
+          # 显示 Java 版本（用于排查）
           java -version
           javac -version
 
@@ -40,7 +38,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer==1.5.0 Cython==0.29.36
 
-      - name: Prepare Android SDK (download only)
+      - name: Prepare Android SDK/NDK (download only)
         working-directory: fitness_app
         run: |
           # 先触发 buildozer 下载/初始化 SDK/NDK（即使失败也继续）
@@ -49,6 +47,12 @@ jobs:
       - name: Install cmdline-tools + accept licenses + install build-tools
         run: |
           set -e
+
+          # ✅ 强制本 step 使用 Java 17（解决 class file 61/55）
+          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
+
           SDKROOT="$HOME/.buildozer/android/platform/android-sdk"
           echo "SDKROOT=$SDKROOT"
           mkdir -p "$SDKROOT"
@@ -65,7 +69,7 @@ jobs:
           SDKMAN="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
           echo "Using sdkmanager: $SDKMAN"
 
-          # 接受许可证
+          # 接受许可证（非交互）
           yes | "$SDKMAN" --sdk_root="$SDKROOT" --licenses
 
           # 安装 platform-tools / platforms / build-tools（含 aidl）
