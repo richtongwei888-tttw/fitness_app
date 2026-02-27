@@ -19,29 +19,76 @@ from kivy.clock import Clock
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from functools import partial
 
-# 字体：优先用打包内的 msyh.ttc；如果缺失就用系统字体（避免闪退）
+# -------- 字体初始化（安卓不闪退版）--------
+from kivy.core.text import Label as CoreLabel
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-candidates = [
-    os.path.join(BASE_DIR, "msyh.ttc"),                 # 你项目里的字体（理想情况）
-    "/system/fonts/NotoSansCJK-Regular.ttc",            # 常见安卓中文字体
-    "/system/fonts/NotoSansSC-Regular.otf",             # 常见安卓中文字体
-    "/system/fonts/DroidSansFallback.ttf",              # 旧安卓常见 fallback
-    "/system/fonts/Roboto-Regular.ttf",                 # 最后兜底（不一定有中文）
-]
+def _try_register_font(path: str) -> bool:
+    """尝试注册并验证字体是否真的可用（能渲染中文），可用返回 True。"""
+    try:
+        LabelBase.register(name="ChineseFont", fn_regular=path)
+        # 关键：做一次真实渲染验证，避免“存在但加载失败”导致后面闪退
+        test = CoreLabel(text="中文OK", font_name="ChineseFont", font_size=20)
+        test.refresh()
+        return True
+    except Exception:
+        return False
 
-font_path = None
-for p in candidates:
-    if os.path.exists(p):
-        font_path = p
-        break
+def _find_system_font() -> str | None:
+    """在 /system/fonts 扫描一个大概率支持中文的字体文件。"""
+    fonts_dir = "/system/fonts"
+    try:
+        names = os.listdir(fonts_dir)
+    except Exception:
+        return None
 
-if font_path:
-    LabelBase.register(name="ChineseFont", fn_regular=font_path)
-    FONT = "ChineseFont"
-else:
-    # 实在找不到就不用自定义字体，也不能崩
-    FONT = None
+    # 优先挑常见中文字体关键词
+    priority_keys = [
+        "NotoSansCJK", "NotoSansSC", "DroidSansFallback", "SourceHanSans", "MiSans",
+        "HarmonyOS", "Hw", "Roboto"  # 最后兜底也可
+    ]
+
+    def full(p): return os.path.join(fonts_dir, p)
+
+    # 1) 先按关键词优先
+    for key in priority_keys:
+        for n in names:
+            if key.lower() in n.lower() and n.lower().endswith((".ttc", ".ttf", ".otf")):
+                return full(n)
+
+    # 2) 再按“体积大”的字体兜底（大概率包含中文字形）
+    candidates = []
+    for n in names:
+        if n.lower().endswith((".ttc", ".ttf", ".otf")):
+            p = full(n)
+            try:
+                sz = os.path.getsize(p)
+            except Exception:
+                continue
+            candidates.append((sz, p))
+
+    if not candidates:
+        return None
+
+    candidates.sort(reverse=True)  # 最大的优先
+    return candidates[0][1]
+
+# 先用项目内 msyh.ttc
+_font_ok = False
+local_font = os.path.join(BASE_DIR, "msyh.ttc")
+if os.path.exists(local_font):
+    _font_ok = _try_register_font(local_font)
+
+# 项目字体不行就用系统字体
+if not _font_ok:
+    sys_font = _find_system_font()
+    if sys_font:
+        _font_ok = _try_register_font(sys_font)
+
+# 最终兜底：用 Roboto（保证不闪退）
+FONT = "ChineseFont" if _font_ok else "Roboto"
+# ------------------------------------------
 
 # 手机比例窗口（只在电脑上设置；安卓上不要改 Window.size，避免闪退）
 from kivy.utils import platform
@@ -609,6 +656,7 @@ class FitnessApp(App):
 
 if __name__ == "__main__":
     FitnessApp().run()
+
 
 
 
