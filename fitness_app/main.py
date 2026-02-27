@@ -19,16 +19,16 @@ from kivy.clock import Clock
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from functools import partial
 
-# 注册字体（Windows）
-import os
-from kivy.core.text import LabelBase
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LabelBase.register(name='ChineseFont', fn_regular=os.path.join(BASE_DIR, 'msyh.ttc'))
 FONT = "ChineseFont"
 
-# 手机比例窗口
-Window.size = (390, 780)
+# 手机比例窗口（只在电脑上设置；安卓上不要改 Window.size，避免闪退）
+from kivy.utils import platform
+
+if platform in ("win", "linux", "macosx"):
+    Window.size = (390, 780)
+
 Window.clearcolor = (0.95, 0.95, 0.97, 1)
 
 PRIMARY = (0.12, 0.45, 0.90, 1)
@@ -589,4 +589,5 @@ class FitnessApp(App):
 
 if __name__ == "__main__":
     FitnessApp().run()
+
 
