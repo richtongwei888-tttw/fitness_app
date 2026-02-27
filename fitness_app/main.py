@@ -19,9 +19,29 @@ from kivy.clock import Clock
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from functools import partial
 
+# 字体：优先用打包内的 msyh.ttc；如果缺失就用系统字体（避免闪退）
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LabelBase.register(name='ChineseFont', fn_regular=os.path.join(BASE_DIR, 'msyh.ttc'))
-FONT = "ChineseFont"
+
+candidates = [
+    os.path.join(BASE_DIR, "msyh.ttc"),                 # 你项目里的字体（理想情况）
+    "/system/fonts/NotoSansCJK-Regular.ttc",            # 常见安卓中文字体
+    "/system/fonts/NotoSansSC-Regular.otf",             # 常见安卓中文字体
+    "/system/fonts/DroidSansFallback.ttf",              # 旧安卓常见 fallback
+    "/system/fonts/Roboto-Regular.ttf",                 # 最后兜底（不一定有中文）
+]
+
+font_path = None
+for p in candidates:
+    if os.path.exists(p):
+        font_path = p
+        break
+
+if font_path:
+    LabelBase.register(name="ChineseFont", fn_regular=font_path)
+    FONT = "ChineseFont"
+else:
+    # 实在找不到就不用自定义字体，也不能崩
+    FONT = None
 
 # 手机比例窗口（只在电脑上设置；安卓上不要改 Window.size，避免闪退）
 from kivy.utils import platform
@@ -589,5 +609,6 @@ class FitnessApp(App):
 
 if __name__ == "__main__":
     FitnessApp().run()
+
 
 
