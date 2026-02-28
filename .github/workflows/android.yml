@@ -107,8 +107,25 @@ jobs:
           java -version
           buildozer -v android release
 
+      # ✅ 关键：把真正生成的 APK/AAB 路径打印出来（否则永远在猜）
+      - name: Locate build outputs
+        run: |
+          echo "=== list dirs (maxdepth 2) ==="
+          find . -maxdepth 2 -type d -print
+          echo "=== find buildozer.spec ==="
+          find . -maxdepth 3 -name buildozer.spec -print || true
+          echo "=== list fitness_app/bin ==="
+          ls -al fitness_app/bin || true
+          echo "=== find APK/AAB (maxdepth 8) ==="
+          find . -maxdepth 8 -type f \( -name "*.apk" -o -name "*.aab" \) -print || true
+
+      # ✅ 上传：不要死盯 fitness_app/bin，直接把常见产物位置都覆盖
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: fitness_app/bin/*.apk
+          path: |
+            **/bin/*.apk
+            **/bin/*.aab
+            **/outputs/apk/**/*.apk
+            **/outputs/bundle/**/*.aab
