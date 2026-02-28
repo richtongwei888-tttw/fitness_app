@@ -111,4 +111,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: fitness_app/bin/*release*.apk
+          path: fitness_app/bin/*.apk
