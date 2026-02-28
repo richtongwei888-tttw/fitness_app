@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
-      # ✅ 强制整个 job 都用 Java17（关键！）
+      # 强制整个 job 都用 Java17
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
 
@@ -23,6 +23,16 @@ jobs:
         with:
           python-version: "3.10"
 
+      # ✅ 只缓存 Gradle（不要缓存 ~/.buildozer，避免把坏的中间产物缓存回来）
+      - name: Cache gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle
+          key: ${{ runner.os }}-gradle-${{ hashFiles('fitness_app/buildozer.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
       - name: Install system deps + Java 17
         run: |
           sudo apt-get update
@@ -34,9 +44,7 @@ jobs:
             libtinfo5 cmake libffi-dev libssl-dev \
             build-essential
 
-          # ✅ 把 Java17 固定到 PATH（让后面所有工具都吃到）
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
-
           java -version
           javac -version
 
@@ -45,12 +53,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer==1.5.0 Cython==0.29.36
 
-      - name: Prepare Android SDK/NDK (download only)
-        working-directory: fitness_app
-        run: |
-          buildozer android debug || true
-
-      - name: Install cmdline-tools + accept licenses + install build-tools
+      # ✅ 先装 SDK cmdline-tools 并接受 licenses，再装 build-tools/platforms/ndk
+      - name: Install cmdline-tools + accept licenses + install SDK/NDK
         run: |
           set -e
           echo "JAVA_HOME=$JAVA_HOME"
@@ -72,12 +76,23 @@ jobs:
           echo "Using sdkmanager: $SDKMAN"
 
           yes | "$SDKMAN" --sdk_root="$SDKROOT" --licenses
-          "$SDKMAN" --sdk_root="$SDKROOT" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+
+          # ✅ 安装必要组件（platform-tools / platforms / build-tools / NDK）
+          "$SDKMAN" --sdk_root="$SDKROOT" \
+            "platform-tools" \
+            "platforms;android-33" \
+            "build-tools;33.0.2" \
+            "ndk;25.2.9519653"
+
+      # ✅ 每次构建前清理项目内 buildozer 状态，避免残留导致缺文件/诡异报错
+      - name: Clean project build dir
+        working-directory: fitness_app
+        run: |
+          rm -rf .buildozer
 
       - name: Build APK (debug)
         working-directory: fitness_app
         run: |
-          # 再确认一次 build 阶段也在用 Java17
           echo "JAVA_HOME=$JAVA_HOME"
           java -version
           buildozer -v android debug
