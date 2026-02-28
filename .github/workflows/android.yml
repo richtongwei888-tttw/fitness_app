@@ -94,6 +94,7 @@ jobs:
           app["android.release_keyalias"] = os.environ["ANDROID_KEY_ALIAS"]
           app["android.release_keystore_passwd"] = os.environ["ANDROID_KEYSTORE_PASSWORD"]
           app["android.release_keyalias_passwd"] = os.environ["ANDROID_KEY_PASSWORD"]
+          app["android.release_artifact"] = "apk"
 
           with open("buildozer.spec", "w", encoding="utf-8") as f:
               cp.write(f)
