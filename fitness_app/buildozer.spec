@@ -14,10 +14,11 @@ android.archs = arm64-v8a
 
 orientation = portrait
 
-android.permissions =
+android.numeric_version = 1
 
 [buildozer]
 log_level = 2
 
 warn_on_root = 1
+
 
