@@ -1,4 +1,5 @@
 [app]
+android.release_artifact = apk
 title = Fitness
 package.name = fitness
 package.domain = org.xxtong
@@ -20,5 +21,6 @@ android.numeric_version = 1
 log_level = 2
 
 warn_on_root = 1
+
 
 
