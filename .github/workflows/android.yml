@@ -10,7 +10,6 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
-      # 强制整个 job 都用 Java17
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
 
@@ -22,16 +21,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-
-      # ✅ 只缓存 Gradle（不要缓存 ~/.buildozer，避免把坏的中间产物缓存回来）
-      - name: Cache gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle
-          key: ${{ runner.os }}-gradle-${{ hashFiles('fitness_app/buildozer.spec') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
 
       - name: Install system deps + Java 17
         run: |
@@ -53,15 +42,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer==1.5.0 Cython==0.29.36
 
-      # ✅ 先装 SDK cmdline-tools 并接受 licenses，再装 build-tools/platforms/ndk
-      - name: Install cmdline-tools + accept licenses + install SDK/NDK
+      - name: Prepare Android SDK/NDK (download only)
+        working-directory: fitness_app
+        run: |
+          buildozer android debug || true
+
+      - name: Install cmdline-tools + accept licenses + install build-tools
         run: |
           set -e
-          echo "JAVA_HOME=$JAVA_HOME"
-          java -version
-
           SDKROOT="$ANDROID_SDK_ROOT"
-          echo "SDKROOT=$SDKROOT"
           mkdir -p "$SDKROOT"
 
           TMPDIR="$(mktemp -d)"
@@ -73,37 +62,53 @@ jobs:
           cp -r cmdline-tools/* "$SDKROOT/cmdline-tools/latest/"
 
           SDKMAN="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
-          echo "Using sdkmanager: $SDKMAN"
-
           yes | "$SDKMAN" --sdk_root="$SDKROOT" --licenses
+          "$SDKMAN" --sdk_root="$SDKROOT" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-          "$SDKMAN" --sdk_root="$SDKROOT" \
-            "platform-tools" \
-            "platforms;android-33" \
-            "build-tools;33.0.2" \
-            "ndk;25.2.9519653"
-
-          # ✅ 兼容 buildozer/p4a 旧路径：tools/bin/sdkmanager
+          # ✅ 兼容 p4a 旧路径：tools/bin/sdkmanager
           mkdir -p "$SDKROOT/tools/bin"
           ln -sf "$SDKROOT/cmdline-tools/latest/bin/sdkmanager" "$SDKROOT/tools/bin/sdkmanager"
           ln -sf "$SDKROOT/cmdline-tools/latest/bin/avdmanager" "$SDKROOT/tools/bin/avdmanager"
-          ls -l "$SDKROOT/tools/bin" || true
 
-      # ✅ 每次构建前清理项目内 buildozer 状态，避免残留导致缺文件/诡异报错
-      - name: Clean project build dir
+      # ✅ 关键：解码 keystore + 注入 buildozer.spec（只在 CI 临时改，不会写回仓库）
+      - name: Inject release keystore + signing config
         working-directory: fitness_app
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          rm -rf .buildozer
+          python - <<'PY'
+          import base64, os, pathlib, configparser
 
-      - name: Build APK (debug)
+          wd = pathlib.Path(".").resolve()
+          ks_path = wd / "fitness-release.jks"
+          ks_path.write_bytes(base64.b64decode(os.environ["ANDROID_KEYSTORE_B64"]))
+
+          cp = configparser.ConfigParser()
+          cp.read("buildozer.spec", encoding="utf-8")
+          app = cp["app"]
+
+          app["android.release_keystore"] = str(ks_path)
+          app["android.release_keyalias"] = os.environ["ANDROID_KEY_ALIAS"]
+          app["android.release_keystore_passwd"] = os.environ["ANDROID_KEYSTORE_PASSWORD"]
+          app["android.release_keyalias_passwd"] = os.environ["ANDROID_KEY_PASSWORD"]
+
+          with open("buildozer.spec", "w", encoding="utf-8") as f:
+              cp.write(f)
+          print("Injected signing config into buildozer.spec")
+          PY
+
+      - name: Build APK (release)
         working-directory: fitness_app
         run: |
           echo "JAVA_HOME=$JAVA_HOME"
           java -version
-          buildozer -v android debug
+          buildozer -v android release
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: fitness_app/bin/*.apk
+          path: fitness_app/bin/*release*.apk
