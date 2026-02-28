@@ -77,12 +77,17 @@ jobs:
 
           yes | "$SDKMAN" --sdk_root="$SDKROOT" --licenses
 
-          # ✅ 安装必要组件（platform-tools / platforms / build-tools / NDK）
           "$SDKMAN" --sdk_root="$SDKROOT" \
             "platform-tools" \
             "platforms;android-33" \
             "build-tools;33.0.2" \
             "ndk;25.2.9519653"
+
+          # ✅ 兼容 buildozer/p4a 旧路径：tools/bin/sdkmanager
+          mkdir -p "$SDKROOT/tools/bin"
+          ln -sf "$SDKROOT/cmdline-tools/latest/bin/sdkmanager" "$SDKROOT/tools/bin/sdkmanager"
+          ln -sf "$SDKROOT/cmdline-tools/latest/bin/avdmanager" "$SDKROOT/tools/bin/avdmanager"
+          ls -l "$SDKROOT/tools/bin" || true
 
       # ✅ 每次构建前清理项目内 buildozer 状态，避免残留导致缺文件/诡异报错
       - name: Clean project build dir
