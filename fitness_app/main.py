@@ -43,6 +43,15 @@ FONT = _register_chinese_font() or "Roboto"
 # Window.size 仅用于桌面预览；安卓真机请不要写死窗口尺寸（会导致缩放/适配问题）
 Window.clearcolor = (0.95, 0.95, 0.97, 1)
 
+# 统一字号（sp）/尺寸（dp）基准：让手机上比例更“正常”，避免偏小
+FONT_H1 = sp(22)
+FONT_H2 = sp(20)
+FONT_BODY = sp(18)
+FONT_SMALL = sp(17)
+FONT_BTN = sp(20)
+FIELD_H = dp(56)
+APPBAR_H = dp(56)
+
 PRIMARY = (0.12, 0.45, 0.90, 1)
 BG = (0.95, 0.95, 0.97, 1)
 CARD_BG = (1, 1, 1, 1)
@@ -81,7 +90,7 @@ class Card(BoxLayout):
         self._rr.size = self.size
 
 
-def make_flat_button(text, bg_color, text_color=(1, 1, 1, 1), height=dp(50), font_size=sp(18)):
+def make_flat_button(text, bg_color, text_color=(1, 1, 1, 1), height=dp(56), font_size=FONT_BTN):
     return Button(
         text=text,
         font_name=FONT,
@@ -95,7 +104,7 @@ def make_flat_button(text, bg_color, text_color=(1, 1, 1, 1), height=dp(50), fon
     )
 
 
-def make_text_input(width=None, font_size=sp(16), max_len=4, int_only=False):
+def make_text_input(width=None, font_size=FONT_BODY, max_len=4, int_only=False, height=FIELD_H):
     ti = TextInput(
         multiline=False,
         font_name=FONT,
@@ -108,6 +117,8 @@ def make_text_input(width=None, font_size=sp(16), max_len=4, int_only=False):
         cursor_color=TEXT,
         size_hint_x=None if width else 1,
         width=width if width else 0,
+        size_hint_y=None,
+        height=height,
     )
     if int_only:
         ti.input_filter = "int"
@@ -131,13 +142,13 @@ class MsgPopup(ModalView):
         lab = Label(
             text=msg,
             font_name=FONT,
-            font_size=sp(18),
+            font_size=FONT_BODY,
             color=TEXT,
             halign="center",
             valign="middle",
         )
         lab.bind(size=lambda inst, val: setattr(inst, "text_size", val))
-        ok = make_flat_button("知道了", bg_color=PRIMARY, height=dp(48), font_size=sp(18))
+        ok = make_flat_button("知道了", bg_color=PRIMARY, height=dp(48), font_size=FONT_BODY)
         ok.bind(on_press=lambda *_: self.dismiss())
 
         body.add_widget(lab)
@@ -156,7 +167,7 @@ class ChoicePopup(ModalView):
         title = Label(
             text=title_text,
             font_name=FONT,
-            font_size=sp(20),
+            font_size=FONT_H2,
             color=PRIMARY,
             size_hint_y=None,
             height=dp(30),
@@ -175,7 +186,7 @@ class ChoicePopup(ModalView):
                 bg_color=(0.92, 0.94, 0.98, 1),
                 text_color=TEXT,
                 height=dp(48),
-                font_size=sp(18),
+                font_size=FONT_BODY,
             )
             b.bind(on_press=lambda inst, v=opt: self._pick(v, on_pick))
             box.add_widget(b)
@@ -184,7 +195,7 @@ class ChoicePopup(ModalView):
         scroll.add_widget(box)
         body.add_widget(scroll)
 
-        cancel = make_flat_button("取消", bg_color=(0.75, 0.75, 0.78, 1), text_color=TEXT, height=dp(48), font_size=sp(18))
+        cancel = make_flat_button("取消", bg_color=(0.75, 0.75, 0.78, 1), text_color=TEXT, height=dp(48), font_size=FONT_BODY)
         cancel.bind(on_press=lambda *_: self.dismiss())
         body.add_widget(cancel)
 
@@ -196,6 +207,18 @@ class ChoicePopup(ModalView):
 
 
 class InputScreen(Screen):
+
+    def _sync_form_card_height(self, *args):
+        """
+        让表单卡片在手机上至少占屏幕的 1/3 高度，避免可点区域过小。
+        同时保证不会小于内容所需高度。
+        """
+        try:
+            target = max(self.form_card.minimum_height, Window.height * 0.35)
+            self.form_card.height = target
+        except Exception:
+            pass
+
     def __init__(self, app, **kwargs):
         super().__init__(**kwargs)
         self.app = app
@@ -204,9 +227,9 @@ class InputScreen(Screen):
         apply_bg_rect(root, BG)
 
         # AppBar
-        appbar = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(56), padding=[dp(16), dp(0), dp(16), dp(0)])
+        appbar = BoxLayout(orientation="horizontal", size_hint_y=None, height=APPBAR_H, padding=[dp(16), dp(0), dp(16), dp(0)])
         apply_bg_rect(appbar, PRIMARY)
-        appbar.add_widget(Label(text="健身记录", font_name=FONT, font_size=sp(20), color=(1, 1, 1, 1)))
+        appbar.add_widget(Label(text="健身记录", font_name=FONT, font_size=FONT_H2, color=(1, 1, 1, 1)))
         root.add_widget(appbar)
 
         scroll = ScrollView(do_scroll_x=False)
@@ -216,17 +239,21 @@ class InputScreen(Screen):
         root.add_widget(scroll)
 
         self.form_card = Card(orientation="vertical", padding=dp(14), spacing=dp(10), radius=dp(18), size_hint_y=None)
-        self.form_card.bind(minimum_height=self.form_card.setter("height"))
         content.add_widget(self.form_card)
+
+        # 适配：表单区域至少占屏幕 1/3 高度（更好点按）
+        Window.bind(size=self._sync_form_card_height)
+        self.form_card.bind(minimum_height=self._sync_form_card_height)
+        self._sync_form_card_height()
 
         # 时间：2026年xx月xx日（保证“日”不溢出）
         self.year = date.today().year
-        time_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(42))
+        time_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(56))
 
         lab_time = Label(
             text=f"时间：{self.year}年",
             font_name=FONT,
-            font_size=sp(16),
+            font_size=FONT_BODY,
             color=TEXT,
             size_hint_x=None,
             width=dp(122),
@@ -235,11 +262,11 @@ class InputScreen(Screen):
         )
         lab_time.bind(size=lambda inst, val: setattr(inst, "text_size", val))
 
-        self.month_input = make_text_input(width=dp(60), font_size=sp(16), max_len=2, int_only=True)
-        lab_m = Label(text="月", font_name=FONT, font_size=sp(16), color=MUTED, size_hint_x=None, width=dp(18))
+        self.month_input = make_text_input(width=dp(72), font_size=FONT_BODY, max_len=2, int_only=True)
+        lab_m = Label(text="月", font_name=FONT, font_size=FONT_BODY, color=MUTED, size_hint_x=None, width=dp(22))
 
-        self.day_input = make_text_input(width=dp(60), font_size=sp(16), max_len=2, int_only=True)
-        lab_d = Label(text="日", font_name=FONT, font_size=sp(16), color=MUTED, size_hint_x=None, width=dp(18))
+        self.day_input = make_text_input(width=dp(72), font_size=FONT_BODY, max_len=2, int_only=True)
+        lab_d = Label(text="日", font_name=FONT, font_size=FONT_BODY, color=MUTED, size_hint_x=None, width=dp(22))
 
         time_row.add_widget(lab_time)
         time_row.add_widget(self.month_input)
@@ -259,11 +286,11 @@ class InputScreen(Screen):
         self.aerobic_btn = self._make_select_row("是否有氧", self.aerobic_value, self.open_aerobic_picker)
 
         # 有氧分钟行（默认不显示）
-        self.minutes_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(42))
+        self.minutes_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(56))
         lab_min = Label(
             text="有氧时间",
             font_name=FONT,
-            font_size=sp(16),
+            font_size=FONT_BODY,
             color=TEXT,
             size_hint_x=None,
             width=dp(140),
@@ -272,8 +299,8 @@ class InputScreen(Screen):
         )
         lab_min.bind(size=lambda inst, val: setattr(inst, "text_size", val))
 
-        self.aerobic_minutes_input = make_text_input(width=dp(120), font_size=sp(16), max_len=4, int_only=True)
-        lab_min_unit = Label(text="分钟", font_name=FONT, font_size=sp(16), color=MUTED, size_hint_x=None, width=dp(44))
+        self.aerobic_minutes_input = make_text_input(width=dp(140), font_size=FONT_BODY, max_len=4, int_only=True)
+        lab_min_unit = Label(text="分钟", font_name=FONT, font_size=FONT_BODY, color=MUTED, size_hint_x=None, width=dp(52))
 
         self.minutes_row.add_widget(lab_min)
         self.minutes_row.add_widget(self.aerobic_minutes_input)
@@ -283,10 +310,10 @@ class InputScreen(Screen):
         btn_area = BoxLayout(orientation="vertical", padding=[dp(16), dp(10)], spacing=dp(10), size_hint_y=None, height=dp(130))
         apply_bg_rect(btn_area, BG)
 
-        add_btn = make_flat_button("添加记录", bg_color=SUCCESS, height=dp(52), font_size=sp(19))
+        add_btn = make_flat_button("添加记录", bg_color=SUCCESS, height=dp(56), font_size=FONT_H2)
         add_btn.bind(on_press=self.add_record)
 
-        view_btn = make_flat_button("查看记录", bg_color=(0.90, 0.55, 0.12, 1), height=dp(48), font_size=sp(18))
+        view_btn = make_flat_button("查看记录", bg_color=(0.90, 0.55, 0.12, 1), height=dp(48), font_size=FONT_BODY)
         view_btn.bind(on_press=lambda *_: setattr(self.manager, "current", "records"))
 
         btn_area.add_widget(add_btn)
@@ -296,12 +323,12 @@ class InputScreen(Screen):
         self.add_widget(root)
 
     def _make_select_row(self, label_text, default_value, on_press):
-        row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(42))
+        row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(56))
 
         lab = Label(
             text=label_text,
             font_name=FONT,
-            font_size=sp(16),
+            font_size=FONT_BODY,
             color=TEXT,
             size_hint_x=None,
             width=dp(140),
@@ -315,7 +342,7 @@ class InputScreen(Screen):
             bg_color=(0.92, 0.94, 0.98, 1),
             text_color=TEXT,
             height=dp(42),
-            font_size=sp(16),
+            font_size=FONT_BODY,
         )
         btn.size_hint_x = 1
         btn.bind(on_press=on_press)
@@ -430,10 +457,10 @@ class RecordsScreen(Screen):
         apply_bg_rect(root, BG)
 
         # AppBar
-        appbar = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(56), padding=[dp(12), dp(0), dp(12), dp(0)], spacing=dp(8))
+        appbar = BoxLayout(orientation="horizontal", size_hint_y=None, height=APPBAR_H, padding=[dp(12), dp(0), dp(12), dp(0)], spacing=dp(8))
         apply_bg_rect(appbar, PRIMARY)
 
-        back_btn = make_flat_button("←", bg_color=PRIMARY, height=dp(56), font_size=sp(22))
+        back_btn = make_flat_button("←", bg_color=PRIMARY, height=APPBAR_H, font_size=sp(22))
         back_btn.size_hint_x = None
         back_btn.width=dp(56)
         back_btn.bind(on_press=lambda *_: setattr(self.manager, "current", "input"))
@@ -442,7 +469,7 @@ class RecordsScreen(Screen):
         title = Label(
             text="记录",
             font_name=FONT,
-            font_size=sp(20),
+            font_size=FONT_H2,
             color=(1, 1, 1, 1),
             halign="center",
             valign="middle",
@@ -509,7 +536,7 @@ class RecordsScreen(Screen):
         records = list(self.app.records)[::-1]
 
         if not records:
-            empty = Label(text="暂无记录", font_name=FONT, font_size=sp(16), color=MUTED, size_hint_y=None, height=dp(40))
+            empty = Label(text="暂无记录", font_name=FONT, font_size=FONT_BODY, color=MUTED, size_hint_y=None, height=dp(40))
             self.list_box.add_widget(empty)
             return
 
@@ -530,7 +557,7 @@ class RecordsScreen(Screen):
                 size_hint_y=None,
             )
 
-            del_btn = make_flat_button("删除", bg_color=DANGER, height=dp(44), font_size=sp(16))
+            del_btn = make_flat_button("删除", bg_color=DANGER, height=dp(44), font_size=FONT_BODY)
             del_btn.size_hint_x = None
             del_btn.width=dp(72)
             del_btn.bind(on_press=partial(self.delete_record, real_index))
@@ -601,6 +628,7 @@ class FitnessApp(App):
 
 if __name__ == "__main__":
     FitnessApp().run()
+
 
 
 
