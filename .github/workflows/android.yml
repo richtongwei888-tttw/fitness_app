@@ -113,6 +113,45 @@ jobs:
           java -version
           buildozer -v android release
 
+      - name: Ensure signed APK (no unsigned)
+        working-directory: fitness_app
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          mkdir -p dist
+
+          # 先找 buildozer 是否已经生成“已签名”的 release.apk（不包含 unsigned）
+          SIGNED_APK="$(ls -1 bin/*release*.apk 2>/dev/null | grep -v unsigned | head -n 1 || true)"
+
+          if [ -n "$SIGNED_APK" ]; then
+            echo "Found signed apk: $SIGNED_APK"
+            cp "$SIGNED_APK" dist/fitness-release.apk
+          else
+            echo "No signed apk found, will sign unsigned apk..."
+            UNSIGNED_APK="$(ls -1 bin/*unsigned*.apk 2>/dev/null | head -n 1)"
+            echo "Unsigned apk: $UNSIGNED_APK"
+
+            ZIPALIGN="$ANDROID_SDK_ROOT/build-tools/33.0.2/zipalign"
+            APKSIGNER="$ANDROID_SDK_ROOT/build-tools/33.0.2/apksigner"
+
+            "$ZIPALIGN" -f 4 "$UNSIGNED_APK" dist/aligned.apk
+
+            "$APKSIGNER" sign \
+              --ks fitness-release.jks \
+              --ks-key-alias "$ANDROID_KEY_ALIAS" \
+              --ks-pass pass:"$ANDROID_KEYSTORE_PASSWORD" \
+              --key-pass pass:"$ANDROID_KEY_PASSWORD" \
+              --out dist/fitness-release.apk \
+              dist/aligned.apk
+
+            "$APKSIGNER" verify --print-certs dist/fitness-release.apk
+          fi
+
+          ls -al dist
+
       # ✅ 关键：把真正生成的 APK/AAB 路径打印出来（否则永远在猜）
       - name: Locate build outputs
         run: |
@@ -125,12 +164,8 @@ jobs:
           echo "=== find APK/AAB (maxdepth 8) ==="
           find . -maxdepth 8 -type f \( -name "*.apk" -o -name "*.aab" \) -print || true
 
-      # ✅ 上传：不要死盯 fitness_app/bin，直接把常见产物位置都覆盖
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: |
-            **/bin/*.apk
-            **/outputs/apk/**/*.apk
-            **/*.apk
+          path: fitness_app/dist/fitness-release.apk
