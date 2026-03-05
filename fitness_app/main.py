@@ -57,21 +57,36 @@ BORDER = (0.15, 0.15, 0.15, 1)
 
 def try_register_font():
     """
-    不是必须。仅当仓库里带了 msyh.ttc（微软雅黑合集）时才注册，避免 Android 缺字/找不到字体导致闪退。
+    可选字体注册（安全版）：
+    - 如果项目中带了 msyh.ttc / msyh.ttf 等字体，只有在“能被 Kivy/Sdl2 真正加载”时才启用。
+    - 否则一律回退到系统默认字体，避免 Android 上因为字体文件不可用导致秒闪退。
     """
+    from kivy.core.text import Label as CoreLabel
+
     candidates = [
         Path(__file__).resolve().parent / "msyh.ttc",
+        Path(__file__).resolve().parent / "msyh.ttf",
+        Path(__file__).resolve().parent / "msyh.otf",
         Path(os.getcwd()) / "msyh.ttc",
+        Path(os.getcwd()) / "msyh.ttf",
+        Path(os.getcwd()) / "msyh.otf",
     ]
+
     for fp in candidates:
-        if fp.exists():
-            try:
-                LabelBase.register(name="AppFont", fn_regular=str(fp))
-                return "AppFont"
-            except Exception:
-                pass
-    # 默认字体
+        if not fp.exists():
+            continue
+        try:
+            # 关键：先做一次真实渲染测试，能 refresh 才说明字体可用
+            test = CoreLabel(text="测试Test", font_name=str(fp), font_size=12)
+            test.refresh()
+            LabelBase.register(name="AppFont", fn_regular=str(fp))
+            return "AppFont"
+        except Exception:
+            # 字体不可用就跳过，绝不硬用
+            continue
+
     return ""
+
 
 
 APP_FONT_NAME = try_register_font()
@@ -262,7 +277,6 @@ class InputScreen(Screen):
         # 锻炼部位
         self.part_row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(10))
         self.part_row.add_widget(make_label("锻炼部位"))
-        self.part_value = StringProperty("未选择")
         self.part_btn = make_value_button("未选择", self.open_part_picker)
         self.part_row.add_widget(self.part_btn)
         self.card.add_widget(self.part_row)
@@ -270,7 +284,6 @@ class InputScreen(Screen):
         # 强度/质量
         self.quality_row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(10))
         self.quality_row.add_widget(make_label("强度"))
-        self.quality_value = StringProperty("未选择")
         self.quality_btn = make_value_button("未选择", self.open_quality_picker)
         self.quality_row.add_widget(self.quality_btn)
         self.card.add_widget(self.quality_row)
@@ -278,7 +291,6 @@ class InputScreen(Screen):
         # 是否有氧
         self.aerobic_row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(10))
         self.aerobic_row.add_widget(make_label("是否有氧"))
-        self.aerobic_value = StringProperty("未选择")
         self.aerobic_btn = make_value_button("未选择", self.open_aerobic_picker)
         self.aerobic_row.add_widget(self.aerobic_btn)
         self.card.add_widget(self.aerobic_row)
