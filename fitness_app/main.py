@@ -1,833 +1,814 @@
 
-import os
+# -*- coding: utf-8 -*-
+"""
+Kivy 健身记录 App（桌面/安卓）
+- 主页：填写记录 + “今天是有氧日”滑动开关
+- 记录页：查看/删除历史记录
+- 底部导航栏：主页 / 记录
+
+说明：为了避免 Android 字体文件缺失导致闪退，本文件默认使用系统/内置字体，
+如果项目目录里存在 msyh.ttc 会自动使用它（可选）。
+"""
+
 import json
-from json import JSONDecodeError
-from datetime import date
+import os
+from datetime import datetime
+from pathlib import Path
 
 from kivy.app import App
-from kivy.core.text import LabelBase
-from kivy.resources import resource_find
-from kivy.core.window import Window
-from kivy.metrics import dp, sp
-
-from kivy.uix.screenmanager import ScreenManager, Screen
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.textinput import TextInput
-from kivy.uix.button import Button
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.modalview import ModalView
 from kivy.clock import Clock
+from kivy.core.text import LabelBase
+from kivy.metrics import dp
+from kivy.properties import BooleanProperty, StringProperty, NumericProperty
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.label import Label
+from kivy.uix.popup import Popup
+from kivy.uix.screenmanager import Screen, ScreenManager, FadeTransition
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.switch import Switch
+from kivy.uix.textinput import TextInput
+from kivy.uix.widget import Widget
 
-from kivy.graphics import Color, Rectangle, RoundedRectangle
-from functools import partial
+from kivy.graphics import Color, Rectangle, RoundedRectangle, Line
 
-# 注册字体（桌面/安卓通用：不强依赖自带字体；能用就用，用不了就回退到默认字体）
-def _pick_app_font():
-    """返回一个可用的 font_name（字符串）。
 
-    目标：任何情况下都不因为字体加载失败而闪退。
-    优先级：
-      1) 项目内 msyh.ttc（如果存在且能被 SDL2_ttf 正常加载）
-      2) 系统字体（尽量找支持中文的）
-      3) Kivy 默认 Roboto（保证不崩）
+# ----------------------------
+# 颜色 & 字体（可按需微调）
+# ----------------------------
+WHITE = (1, 1, 1, 1)
+BLACK = (0, 0, 0, 1)
+MUTED_TEXT = (0.15, 0.15, 0.15, 1)
+SUBTLE = (0.65, 0.65, 0.65, 1)
+
+# 有氧日淡蓝色（整个界面）
+CARDIO_BG = (0.86, 0.93, 1.00, 1)
+
+# 统一主色（按钮/高亮）
+ACCENT = (0.12, 0.53, 0.96, 1)
+
+# 表单“卡片”背景（白底上更柔和一点点）
+CARD_BG_NORMAL = (0.97, 0.98, 0.99, 1)
+CARD_BG_CARDIO = (0.93, 0.97, 1.00, 1)
+
+BORDER = (0.15, 0.15, 0.15, 1)
+
+
+def try_register_font():
     """
-
-    fallback = "Roboto"
-
-    def _font_loadable(font_name: str) -> bool:
-        try:
-            from kivy.core.text import Label as CoreLabel
-            # 用中文+英文各测一次，避免“注册成功但渲染时失败”
-            t = CoreLabel(text="测试Aa", font_name=font_name, font_size=sp(18))
-            t.refresh()
-            return True
-        except Exception:
-            return False
-
-    def _register_and_test(font_path: str, name: str):
-        try:
-            if not (font_path and os.path.isfile(font_path)):
-                return None
-            LabelBase.register(name=name, fn_regular=font_path)
-            if _font_loadable(name):
-                return name
-        except Exception:
-            pass
-        return None
-
-    # 1) 项目内字体（如果存在且可用）
-    app_dir = os.environ.get("ANDROID_ARGUMENT") or os.getcwd()
+    不是必须。仅当仓库里带了 msyh.ttc（微软雅黑合集）时才注册，避免 Android 缺字/找不到字体导致闪退。
+    """
     candidates = [
-        os.path.join(app_dir, "msyh.ttc"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "msyh.ttc"),
-        resource_find("msyh.ttc"),
+        Path(__file__).resolve().parent / "msyh.ttc",
+        Path(os.getcwd()) / "msyh.ttc",
     ]
-
     for fp in candidates:
-        name = _register_and_test(fp, "AppFont")
-        if name:
-            return name
-
-    # 2) 系统字体兜底（尽量找支持中文的）
-    sys_dirs = [
-        "/system/fonts",
-        "/product/fonts",
-        "/system/product/fonts",
-        "/hw_product/fonts",
-        "/odm/fonts",
-    ]
-    preferred_names = [
-        "DroidSansFallback.ttf",
-        "NotoSansCJK-Regular.ttc",
-        "NotoSansCJKsc-Regular.otf",
-        "NotoSansSC-Regular.otf",
-        "NotoSansHans-Regular.otf",
-        "HarmonyOS_Sans_SC_Regular.ttf",
-        "HarmonyOS_Sans_SC.ttf",
-        "HwChinese-medium.ttf",
-        "HwChinese.ttf",
-        "NotoSerifCJK-Regular.ttc",
-    ]
-
-    sys_i = 0
-    scan_i = 0
-    for d in sys_dirs:
-        if not os.path.isdir(d):
-            continue
-
-        # 2.1 先试常见文件名
-        for fn in preferred_names:
-            fp = os.path.join(d, fn)
-            sys_i += 1
-            name = _register_and_test(fp, f"SysFont_{sys_i}")
-            if name:
-                return name
-
-        # 2.2 再扫描目录，挑“看起来像中文字体”的候选
-        try:
-            for fn in os.listdir(d):
-                low = fn.lower()
-                if not low.endswith((".ttf", ".ttc", ".otf")):
-                    continue
-                if any(k in low for k in ("cjk", "han", "hans", "sc", "chinese", "harmony", "droidsansfallback")):
-                    fp = os.path.join(d, fn)
-                    scan_i += 1
-                    name = _register_and_test(fp, f"SysScan_{scan_i}")
-                    if name:
-                        return name
-        except Exception:
-            pass
-
-    # 3) 最后用 Kivy 默认 Roboto（保证不崩）
-    return fallback
+        if fp.exists():
+            try:
+                LabelBase.register(name="AppFont", fn_regular=str(fp))
+                return "AppFont"
+            except Exception:
+                pass
+    # 默认字体
+    return ""
 
 
-FONT = _pick_app_font()
+APP_FONT_NAME = try_register_font()
 
 
-
-# 手机比例窗口
-# Window.size 仅用于桌面预览；安卓真机请不要写死窗口尺寸（会导致缩放/适配问题）
-Window.clearcolor = (0.95, 0.95, 0.97, 1)
-
-# 统一字号（sp）/尺寸（dp）基准：让手机上比例更“正常”，避免偏小
-FONT_H1 = sp(22)
-FONT_H2 = sp(20)
-FONT_BODY = sp(18)
-FONT_SMALL = sp(17)
-FONT_BTN = sp(20)
-FIELD_H = dp(56)
-APPBAR_H = dp(56)
-
-PRIMARY = (0.12, 0.45, 0.90, 1)
-BG = (0.95, 0.95, 0.97, 1)
-CARD_BG = (1, 1, 1, 1)
-TEXT = (0.12, 0.12, 0.14, 1)
-MUTED = (0.35, 0.35, 0.38, 1)
-DANGER = (0.86, 0.24, 0.24, 1)
-SUCCESS = (0.18, 0.72, 0.38, 1)
-FIELD_BG = (0.97, 0.97, 0.99, 1)
-
-ERR_MSG = "不要使坏，正确填写吧"
+def load_records(records_path: Path):
+    if not records_path.exists():
+        return []
+    try:
+        return json.loads(records_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
 
 
-def apply_bg_rect(widget, color_rgba):
-    with widget.canvas.before:
-        Color(*color_rgba)
-        rect = Rectangle(pos=widget.pos, size=widget.size)
-
-    def _upd(*_):
-        rect.pos = widget.pos
-        rect.size = widget.size
-
-    widget.bind(pos=_upd, size=_upd)
-    return rect
+def save_records(records_path: Path, records):
+    records_path.parent.mkdir(parents=True, exist_ok=True)
+    records_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-class Card(BoxLayout):
-    def __init__(self, radius=dp(16), bg=CARD_BG, **kwargs):
+class Separator(Widget):
+    """一条黑色分割线（上/下隔开用）"""
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.size_hint_y = None
+        self.height = dp(1)
+        with self.canvas:
+            Color(*BLACK)
+            self._rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update, size=self._update)
+
+    def _update(self, *_):
+        self._rect.pos = self.pos
+        self._rect.size = self.size
+
+
+class SoftCard(BoxLayout):
+    """柔和的内容卡片：圆角 + 细边框，避免白底上突兀。"""
+    bg_rgba = (0.97, 0.98, 0.99, 1)
+    radius = NumericProperty(dp(16))
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = "vertical"
+        self.padding = dp(14)
+        self.spacing = dp(10)
+        self.size_hint_y = None
+
         with self.canvas.before:
-            Color(*bg)
-            self._rr = RoundedRectangle(pos=self.pos, size=self.size, radius=[radius])
-        self.bind(pos=self._upd, size=self._upd)
+            self._bg_color = Color(*self.bg_rgba)
+            self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[self.radius])
+            Color(*BORDER)
+            self._border = Line(rounded_rectangle=(self.x, self.y, self.width, self.height, self.radius), width=1.0)
 
-    def _upd(self, *_):
-        self._rr.pos = self.pos
-        self._rr.size = self.size
+        self.bind(pos=self._update_canvas, size=self._update_canvas)
+
+    def set_bg(self, rgba):
+        self._bg_color.rgba = rgba
+
+    def _update_canvas(self, *_):
+        self._bg.pos = self.pos
+        self._bg.size = self.size
+        self._bg.radius = [self.radius]
+        self._border.rounded_rectangle = (self.x, self.y, self.width, self.height, self.radius)
 
 
-def make_flat_button(text, bg_color, text_color=(1, 1, 1, 1), height=dp(56), font_size=FONT_BTN):
-    return Button(
+def make_title(text):
+    return Label(
         text=text,
-        font_name=FONT,
-        font_size=font_size,
+        font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+        color=BLACK,
+        bold=True,
+        font_size=dp(18),
         size_hint_y=None,
-        height=height,
-        background_normal="",
-        background_down="",
-        background_color=bg_color,
-        color=text_color,
+        height=dp(48),
+        halign="left",
+        valign="middle",
+        padding=(dp(14), 0),
     )
 
 
-def make_text_input(width=None, font_size=FONT_BODY, max_len=4, int_only=False, height=FIELD_H):
-    ti = TextInput(
-        multiline=False,
-        font_name=FONT,
-        font_size=font_size,
-        padding=[dp(10), dp(10), dp(10), dp(10)],
-        background_normal="",
-        background_active="",
-        background_color=FIELD_BG,
-        foreground_color=TEXT,
-        cursor_color=TEXT,
-        size_hint_x=None if width else 1,
-        width=width if width else 0,
-        size_hint_y=None,
-        height=height,
+def make_label(text):
+    return Label(
+        text=text,
+        font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+        color=MUTED_TEXT,
+        font_size=dp(16),
+        size_hint_x=0.45,
+        halign="left",
+        valign="middle",
     )
-    if int_only:
-        ti.input_filter = "int"
-
-    def _limit(_, val):
-        if max_len and len(val) > max_len:
-            ti.text = val[:max_len]
-
-    ti.bind(text=_limit)
-    return ti
 
 
-class MsgPopup(ModalView):
-    def __init__(self, msg: str, **kwargs):
-        super().__init__(**kwargs)
-        self.size_hint = (0.88, None)
-        self.height=dp(170)
-        self.auto_dismiss = True
+def make_value_button(text, on_press=None):
+    btn = Button(
+        text=text,
+        font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+        font_size=dp(16),
+        color=BLACK,
+        background_normal="",
+        background_color=WHITE,
+        size_hint_x=0.55,
+    )
+    # 细边框让按钮更像输入框
+    with btn.canvas.before:
+        Color(0.80, 0.80, 0.80, 1)
+        btn._border = Line(rounded_rectangle=(btn.x, btn.y, btn.width, btn.height, dp(10)), width=1.0)
+    def _update(*_):
+        btn._border.rounded_rectangle = (btn.x, btn.y, btn.width, btn.height, dp(10))
+    btn.bind(pos=_update, size=_update)
 
-        body = Card(orientation="vertical", padding=dp(16), spacing=dp(12), radius=dp(18), size_hint=(1, 1))
-        lab = Label(
-            text=msg,
-            font_name=FONT,
-            font_size=FONT_BODY,
-            color=TEXT,
-            halign="center",
-            valign="middle",
-        )
-        lab.bind(size=lambda inst, val: setattr(inst, "text_size", val))
-        ok = make_flat_button("知道了", bg_color=PRIMARY, height=dp(48), font_size=FONT_BODY)
-        ok.bind(on_press=lambda *_: self.dismiss())
-
-        body.add_widget(lab)
-        body.add_widget(ok)
-        self.add_widget(body)
+    if on_press:
+        btn.bind(on_press=on_press)
+    return btn
 
 
-class ChoicePopup(ModalView):
-    def __init__(self, title_text: str, options: list[str], on_pick, **kwargs):
-        super().__init__(**kwargs)
-        self.size_hint = (0.90, 0.62)
-        self.auto_dismiss = True
-
-        body = Card(orientation="vertical", padding=dp(16), spacing=dp(12), radius=dp(18))
-
-        title = Label(
-            text=title_text,
-            font_name=FONT,
-            font_size=FONT_H2,
-            color=PRIMARY,
-            size_hint_y=None,
-            height=dp(30),
-            halign="center",
-            valign="middle",
-        )
-        title.bind(size=lambda inst, val: setattr(inst, "text_size", val))
-        body.add_widget(title)
-
-        box = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None)
-        box.bind(minimum_height=box.setter("height"))
-
-        for opt in options:
-            b = make_flat_button(
-                opt,
-                bg_color=(0.92, 0.94, 0.98, 1),
-                text_color=TEXT,
-                height=dp(48),
-                font_size=FONT_BODY,
-            )
-            b.bind(on_press=lambda inst, v=opt: self._pick(v, on_pick))
-            box.add_widget(b)
-
-        scroll = ScrollView(do_scroll_x=False)
-        scroll.add_widget(box)
-        body.add_widget(scroll)
-
-        cancel = make_flat_button("取消", bg_color=(0.75, 0.75, 0.78, 1), text_color=TEXT, height=dp(48), font_size=FONT_BODY)
-        cancel.bind(on_press=lambda *_: self.dismiss())
-        body.add_widget(cancel)
-
-        self.add_widget(body)
-
-    def _pick(self, value, on_pick):
-        on_pick(value)
-        self.dismiss()
+def make_primary_button(text, on_press):
+    btn = Button(
+        text=text,
+        font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+        font_size=dp(18),
+        bold=True,
+        color=WHITE,
+        background_normal="",
+        background_color=ACCENT,
+        size_hint_y=None,
+        height=dp(52),
+    )
+    btn.bind(on_press=on_press)
+    # 圆角
+    with btn.canvas.before:
+        Color(0, 0, 0, 0)  # 占位（避免某些机型 canvas 顺序问题）
+        btn._bg = RoundedRectangle(pos=btn.pos, size=btn.size, radius=[dp(14)])
+    def _sync(*_):
+        btn._bg.pos = btn.pos
+        btn._bg.size = btn.size
+    btn.bind(pos=_sync, size=_sync)
+    return btn
 
 
 class InputScreen(Screen):
+    cardio_mode = BooleanProperty(False)
 
-    def _request_form_sync(self, *args):
-        # 用 schedule_once 合并多次触发，避免布局过程里反复重入导致的潜在崩溃/卡顿
-        if getattr(self, "_form_sync_ev", None) is None:
-            self._form_sync_ev = Clock.schedule_once(self._sync_form_card_height, 0)
-
-    def _sync_form_card_height(self, *args):
-        """
-        让表单卡片在手机上至少占屏幕的 1/3 高度，避免可点区域过小。
-        同时保证不会小于内容所需高度。
-        """
-        self._form_sync_ev = None
-        if not hasattr(self, "form_card"):
-            return
-        try:
-            content_h = getattr(self.form_card, "minimum_height", 0) or 0
-            target = max(content_h, Window.height * 0.35)
-            self.form_card.height = target
-        except Exception:
-            return
-
-    def __init__(self, app, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.app = app
 
-        root = BoxLayout(orientation="vertical")
-        apply_bg_rect(root, BG)
+        self.app = App.get_running_app()
+        self.records_path = Path(self.app.user_data_dir) / "records.json"
 
-        # AppBar
-        appbar = BoxLayout(orientation="horizontal", size_hint_y=None, height=APPBAR_H, padding=[dp(16), dp(0), dp(16), dp(0)])
-        apply_bg_rect(appbar, PRIMARY)
-        appbar.add_widget(Label(text="健身记录", font_name=FONT, font_size=FONT_H2, color=(1, 1, 1, 1)))
-        root.add_widget(appbar)
+        self.root_layout = BoxLayout(orientation="vertical", spacing=0)
 
-        scroll = ScrollView(do_scroll_x=False)
-        content = BoxLayout(orientation="vertical", padding=[dp(16), dp(16)], spacing=dp(12), size_hint_y=None)
-        content.bind(minimum_height=content.setter("height"))
-        scroll.add_widget(content)
-        root.add_widget(scroll)
+        # --- 顶部 AppBar（白底 + 黑线）
+        self.appbar = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(56))
+        self.appbar_bg = self._apply_solid_bg(self.appbar, WHITE)
+        self.appbar.add_widget(
+            Label(
+                text="健身记录",
+                font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+                color=BLACK,
+                bold=True,
+                font_size=dp(20),
+            )
+        )
+        self.root_layout.add_widget(self.appbar)
+        self.root_layout.add_widget(Separator())
 
-        self.form_card = Card(orientation="vertical", padding=dp(14), spacing=dp(10), radius=dp(18), size_hint_y=None)
-        content.add_widget(self.form_card)
+        # --- 内容区（可滚动）
+        self.body = BoxLayout(orientation="vertical", padding=(dp(16), dp(16)), spacing=dp(12))
+        self.body_bg = self._apply_solid_bg(self.body, WHITE)
 
-        # 适配：表单区域至少占屏幕 1/3 高度（更好点按）
-        # 用 request + schedule 的方式，避免布局过程多次触发造成重入/闪退
-        Window.bind(size=self._request_form_sync)
-        self._request_form_sync()
+        self.card = SoftCard()
+        self.card.set_bg(CARD_BG_NORMAL)
 
-        # 时间：2026年xx月xx日（保证“日”不溢出）
-        self.year = date.today().year
-        time_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(56))
+        # 日期
+        date_row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(10))
+        date_row.add_widget(make_label("日期"))
+        self.date_input = TextInput(
+            hint_text="YYYY-MM-DD",
+            multiline=False,
+            font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+            font_size=dp(16),
+            foreground_color=BLACK,
+            background_color=WHITE,
+            cursor_color=BLACK,
+        )
+        date_row.add_widget(self.date_input)
+        self.card.add_widget(date_row)
 
-        lab_time = Label(
-            text=f"时间：{self.year}年",
-            font_name=FONT,
-            font_size=FONT_BODY,
-            color=TEXT,
+        # 锻炼部位
+        self.part_row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(10))
+        self.part_row.add_widget(make_label("锻炼部位"))
+        self.part_value = StringProperty("未选择")
+        self.part_btn = make_value_button("未选择", self.open_part_picker)
+        self.part_row.add_widget(self.part_btn)
+        self.card.add_widget(self.part_row)
+
+        # 强度/质量
+        self.quality_row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(10))
+        self.quality_row.add_widget(make_label("强度"))
+        self.quality_value = StringProperty("未选择")
+        self.quality_btn = make_value_button("未选择", self.open_quality_picker)
+        self.quality_row.add_widget(self.quality_btn)
+        self.card.add_widget(self.quality_row)
+
+        # 是否有氧
+        self.aerobic_row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(10))
+        self.aerobic_row.add_widget(make_label("是否有氧"))
+        self.aerobic_value = StringProperty("未选择")
+        self.aerobic_btn = make_value_button("未选择", self.open_aerobic_picker)
+        self.aerobic_row.add_widget(self.aerobic_btn)
+        self.card.add_widget(self.aerobic_row)
+
+        # 有氧时间（分钟）
+        self.minutes_row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(10))
+        self.minutes_row.add_widget(make_label("有氧时间(分钟)"))
+        self.minutes_input = TextInput(
+            hint_text="例如 30",
+            multiline=False,
+            input_filter="int",
+            font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+            font_size=dp(16),
+            foreground_color=BLACK,
+            background_color=WHITE,
+            cursor_color=BLACK,
+        )
+        self.minutes_row.add_widget(self.minutes_input)
+        self.minutes_row.opacity = 0
+        self.minutes_row.disabled = True
+        self.card.add_widget(self.minutes_row)
+
+        # 有氧日开关（滑动 Switch）
+        self.cardio_row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(10))
+        self.cardio_row.add_widget(make_label("今天是有氧日"))
+        right = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint_x=0.55)
+        self.cardio_switch = Switch(active=False)
+        self.cardio_switch.bind(active=self.on_cardio_toggle)
+        right.add_widget(self.cardio_switch)
+        right.add_widget(Label(
+            text="开/关",
+            font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+            color=SUBTLE,
+            font_size=dp(14),
             size_hint_x=None,
-            width=dp(122),
-            halign="right",
+            width=dp(50),
+            halign="left",
             valign="middle",
+        ))
+        self.cardio_row.add_widget(right)
+        self.card.add_widget(self.cardio_row)
+
+        # 确定按钮（放在“有氧日”下面）
+        self.confirm_btn = make_primary_button("确定", self.on_confirm)
+        self.card.add_widget(self.confirm_btn)
+
+        self.body.add_widget(self.card)
+
+        # 填充，避免内容太靠上
+        self.body.add_widget(Widget(size_hint_y=1))
+
+        sv = ScrollView(do_scroll_x=False)
+        sv.add_widget(self.body)
+        self.root_layout.add_widget(sv)
+
+        # --- 底部导航栏（白底 + 黑线）
+        self.root_layout.add_widget(Separator())
+        self.nav = self.build_nav(active="home")
+        self.root_layout.add_widget(self.nav)
+
+        self.add_widget(self.root_layout)
+
+        # 卡片高度同步（让它看起来更像“中间一块内容区”）
+        Clock.schedule_once(self._sync_card_height, 0)
+
+    # ---------- UI helpers ----------
+    def _apply_solid_bg(self, widget, rgba):
+        with widget.canvas.before:
+            c = Color(*rgba)
+            r = Rectangle(pos=widget.pos, size=widget.size)
+        def _u(*_):
+            r.pos = widget.pos
+            r.size = widget.size
+        widget.bind(pos=_u, size=_u)
+        return c  # 返回 Color 方便动态改色
+
+    def build_nav(self, active="home"):
+        nav = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(58), padding=(dp(10), 0), spacing=dp(10))
+        nav_bg = self._apply_solid_bg(nav, WHITE)
+
+        def make_nav_btn(title, key):
+            btn = Button(
+                text=title,
+                font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+                font_size=dp(16),
+                background_normal="",
+                background_color=WHITE,
+                color=ACCENT if key == active else BLACK,
+            )
+            def go(_):
+                if key == "home":
+                    self.manager.current = "input"
+                else:
+                    self.manager.current = "records"
+            btn.bind(on_press=go)
+            return btn
+
+        nav.add_widget(make_nav_btn("主页", "home"))
+        nav.add_widget(make_nav_btn("记录", "records"))
+        # 存一下，便于后面需要更新高亮（可选）
+        nav._bg = nav_bg
+        return nav
+
+    def _sync_card_height(self, *_):
+        # 让卡片至少占 1/3 屏幕高度，但也不会太大
+        min_h = self.height * 0.35
+        content_h = sum((w.height if hasattr(w, "height") else 0) for w in self.card.children)
+        # children 是倒序，height 都是固定的，这里只要给个下限即可
+        self.card.height = max(min_h, dp(56) * 6 + dp(14) * 2 + dp(10) * 5)
+
+    # ---------- Pickers ----------
+    def _popup_picker(self, title, options, on_pick):
+        gl = GridLayout(cols=1, spacing=dp(8), padding=dp(12), size_hint_y=None)
+        gl.bind(minimum_height=gl.setter("height"))
+
+        for opt in options:
+            b = Button(
+                text=opt,
+                font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+                font_size=dp(16),
+                color=BLACK,
+                background_normal="",
+                background_color=WHITE,
+                size_hint_y=None,
+                height=dp(48),
+            )
+            def _make_cb(v):
+                def cb(_btn):
+                    on_pick(v)
+                    pop.dismiss()
+                return cb
+            b.bind(on_press=_make_cb(opt))
+            gl.add_widget(b)
+
+        sv = ScrollView(do_scroll_x=False)
+        sv.add_widget(gl)
+
+        pop = Popup(
+            title=title,
+            content=sv,
+            size_hint=(0.85, 0.7),
+            auto_dismiss=True,
         )
-        lab_time.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        pop.open()
 
-        self.month_input = make_text_input(width=dp(72), font_size=FONT_BODY, max_len=2, int_only=True)
-        lab_m = Label(text="月", font_name=FONT, font_size=FONT_BODY, color=MUTED, size_hint_x=None, width=dp(22))
-
-        self.day_input = make_text_input(width=dp(72), font_size=FONT_BODY, max_len=2, int_only=True)
-        lab_d = Label(text="日", font_name=FONT, font_size=FONT_BODY, color=MUTED, size_hint_x=None, width=dp(22))
-
-        time_row.add_widget(lab_time)
-        time_row.add_widget(self.month_input)
-        time_row.add_widget(lab_m)
-        time_row.add_widget(self.day_input)
-        time_row.add_widget(lab_d)
-        self.form_card.add_widget(time_row)
-
-        # 选择行
-        self.part_value = "未选择"
-        self.part_btn = self._make_select_row("训练部位", self.part_value, self.open_part_picker)
-
-        self.quality_value = "未选择"
-        self.quality_btn = self._make_select_row("训练质量", self.quality_value, self.open_quality_picker)
-
-        self.aerobic_value = "没做"
-        self.aerobic_btn = self._make_select_row("是否有氧", self.aerobic_value, self.open_aerobic_picker)
-
-        # “今天是有氧日”快捷记录（record_type = cardio_day）
-        # 目的：只填日期 + 有氧分钟即可添加记录，并在列表页显示固定文案。
-        self.cardio_day_mode = False
-        self._aerobic_locked = False
-        self._aerobic_prev_before_cardio_day = self.aerobic_value
-
-        self.cardio_day_btn = self._make_select_row("今天是有氧日", "未开启", self.toggle_cardio_day)
-
-        # 有氧分钟行（默认不显示）
-        self.minutes_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(56))
-        lab_min = Label(
-            text="有氧时间",
-            font_name=FONT,
-            font_size=FONT_BODY,
-            color=TEXT,
-            size_hint_x=None,
-            width=dp(140),
-            halign="right",
-            valign="middle",
-        )
-        lab_min.bind(size=lambda inst, val: setattr(inst, "text_size", val))
-
-        self.aerobic_minutes_input = make_text_input(width=dp(140), font_size=FONT_BODY, max_len=4, int_only=True)
-        lab_min_unit = Label(text="分钟", font_name=FONT, font_size=FONT_BODY, color=MUTED, size_hint_x=None, width=dp(52))
-
-        self.minutes_row.add_widget(lab_min)
-        self.minutes_row.add_widget(self.aerobic_minutes_input)
-        self.minutes_row.add_widget(lab_min_unit)
-
-        # 底部按钮区
-        btn_area = BoxLayout(orientation="vertical", padding=[dp(16), dp(10)], spacing=dp(10), size_hint_y=None, height=dp(130))
-        apply_bg_rect(btn_area, BG)
-
-        add_btn = make_flat_button("添加记录", bg_color=SUCCESS, height=dp(56), font_size=FONT_H2)
-        add_btn.bind(on_press=self.add_record)
-
-        view_btn = make_flat_button("查看记录", bg_color=(0.90, 0.55, 0.12, 1), height=dp(48), font_size=FONT_BODY)
-        view_btn.bind(on_press=lambda *_: setattr(self.manager, "current", "records"))
-
-        btn_area.add_widget(add_btn)
-        btn_area.add_widget(view_btn)
-        root.add_widget(btn_area)
-
-        self.add_widget(root)
-
-    def _make_select_row(self, label_text, default_value, on_press):
-        row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(56))
-
-        lab = Label(
-            text=label_text,
-            font_name=FONT,
-            font_size=FONT_BODY,
-            color=TEXT,
-            size_hint_x=None,
-            width=dp(140),
-            halign="right",
-            valign="middle",
-        )
-        lab.bind(size=lambda inst, val: setattr(inst, "text_size", val))
-
-        btn = make_flat_button(
-            default_value,
-            bg_color=(0.92, 0.94, 0.98, 1),
-            text_color=TEXT,
-            height=dp(42),
-            font_size=FONT_BODY,
-        )
-        btn.size_hint_x = 1
-        btn.bind(on_press=on_press)
-
-        row.add_widget(lab)
-        row.add_widget(btn)
-        self.form_card.add_widget(row)
-        return btn
-
-    # 选择弹窗
     def open_part_picker(self, *_):
-        ChoicePopup("选择训练部位", ["胸", "背", "肩", "腿"], on_pick=self.set_part).open()
+        if self.cardio_mode:
+            return
+        options = ["胸", "背", "腿", "肩", "手臂", "核心", "全身", "拉伸", "其他"]
+        self._popup_picker("选择锻炼部位", options, self._set_part)
 
-    def set_part(self, v):
-        self.part_value = v
+    def _set_part(self, v):
         self.part_btn.text = v
 
     def open_quality_picker(self, *_):
-        ChoicePopup("选择训练质量", ["好", "一般", "差"], on_pick=self.set_quality).open()
+        if self.cardio_mode:
+            return
+        options = ["轻松", "正常", "困难", "力竭"]
+        self._popup_picker("选择强度", options, self._set_quality)
 
-    def set_quality(self, v):
-        self.quality_value = v
+    def _set_quality(self, v):
         self.quality_btn.text = v
 
     def open_aerobic_picker(self, *_):
-        # “今天是有氧日”模式下强制为“做了”，避免两套逻辑打架
-        if getattr(self, "_aerobic_locked", False):
+        if self.cardio_mode:
             return
-        ChoicePopup("是否做有氧", ["没做", "做了"], on_pick=self.set_aerobic).open()
+        options = ["做了", "没做"]
+        self._popup_picker("是否有氧", options, self._set_aerobic)
 
-    def _apply_aerobic_value(self, v: str, *, from_user: bool = True):
-        if from_user and getattr(self, "_aerobic_locked", False):
-            return
-
-        self.aerobic_value = v
+    def _set_aerobic(self, v):
         self.aerobic_btn.text = v
-
-        need_minutes = (v == "做了") or getattr(self, "cardio_day_mode", False)
-        if need_minutes:
-            if self.minutes_row.parent is None:
-                self.form_card.add_widget(self.minutes_row)
+        if v == "做了":
+            self._show_minutes(True)
         else:
-            self.aerobic_minutes_input.text = ""
-            if self.minutes_row.parent is not None:
-                self.form_card.remove_widget(self.minutes_row)
+            self.minutes_input.text = ""
+            self._show_minutes(False)
 
-        self._request_form_sync()
+    def _show_minutes(self, show: bool):
+        self.minutes_row.opacity = 1 if show else 0
+        self.minutes_row.disabled = not show
 
-    def set_aerobic(self, v):
-        self._apply_aerobic_value(v, from_user=True)
+    # ---------- Cardio mode toggle ----------
+    def on_cardio_toggle(self, _sw, active: bool):
+        self.cardio_mode = bool(active)
 
-    def toggle_cardio_day(self, *_):
-        self.set_cardio_day_mode(not getattr(self, "cardio_day_mode", False))
+        if self.cardio_mode:
+            # 进入有氧日：隐藏除日期+分钟外所有选项
+            self.part_row.opacity = 0
+            self.part_row.disabled = True
+            self.quality_row.opacity = 0
+            self.quality_row.disabled = True
+            self.aerobic_row.opacity = 0
+            self.aerobic_row.disabled = True
 
-    def set_cardio_day_mode(self, enabled: bool):
-        enabled = bool(enabled)
-        if enabled == getattr(self, "cardio_day_mode", False):
-            return
+            # 强制显示分钟输入
+            self._show_minutes(True)
+            # 背景变淡蓝色（整个界面）
+            self.body_bg.rgba = CARDIO_BG
+            self.appbar_bg.rgba = CARDIO_BG
+            self.card.set_bg(CARD_BG_CARDIO)
 
-        self.cardio_day_mode = enabled
-
-        if enabled:
-            # 记住进入“有氧日”前的选择，关闭时可恢复
-            self._aerobic_prev_before_cardio_day = self.aerobic_value
-
-            # 锁定“是否有氧”为“做了”，避免与“有氧日”模式冲突
-            self._aerobic_locked = True
-            self.aerobic_btn.disabled = True
-            self.cardio_day_btn.text = "已开启"
-
-            # 强制展示“有氧分钟”输入
-            self._apply_aerobic_value("做了", from_user=False)
-
-            # 聚焦到分钟输入（更顺手）
-            Clock.schedule_once(lambda dt: setattr(self.aerobic_minutes_input, "focus", True), 0)
+            # 自动把部位/有氧设置为有氧日（不强制写到按钮上也行，这里写上便于确认）
+            self.part_btn.text = "今天是有氧日"
+            self.quality_btn.text = "—"
+            self.aerobic_btn.text = "做了"
         else:
-            self._aerobic_locked = False
-            self.aerobic_btn.disabled = False
-            self.cardio_day_btn.text = "未开启"
+            # 回到普通记录
+            self.part_row.opacity = 1
+            self.part_row.disabled = False
+            self.quality_row.opacity = 1
+            self.quality_row.disabled = False
+            self.aerobic_row.opacity = 1
+            self.aerobic_row.disabled = False
 
-            prev = getattr(self, "_aerobic_prev_before_cardio_day", "没做") or "没做"
-            self._apply_aerobic_value(prev, from_user=False)
+            # 背景回白
+            self.body_bg.rgba = WHITE
+            self.appbar_bg.rgba = WHITE
+            self.card.set_bg(CARD_BG_NORMAL)
 
-        self._request_form_sync()
-    def _bad_input(self, focus_widget=None, clear_date=False, clear_minutes=False):
-        if clear_date:
-            self.month_input.text = ""
-            self.day_input.text = ""
-        if clear_minutes:
-            self.aerobic_minutes_input.text = ""
+            # 根据是否有氧决定是否显示分钟
+            if self.aerobic_btn.text == "做了":
+                self._show_minutes(True)
+            else:
+                self._show_minutes(False)
 
-        pop = MsgPopup(ERR_MSG)
-        if focus_widget is not None:
-            pop.bind(on_dismiss=lambda *_: setattr(focus_widget, "focus", True))
-        pop.open()
+            # 恢复按钮文案（不强行清空用户输入，只把“有氧日”占位清掉）
+            if self.part_btn.text == "今天是有氧日":
+                self.part_btn.text = "未选择"
+            if self.quality_btn.text == "—":
+                self.quality_btn.text = "未选择"
+            if self.aerobic_btn.text == "做了":
+                # 保留，不改
+                pass
 
-    def add_record(self, *_):
-        m_txt = self.month_input.text.strip()
-        d_txt = self.day_input.text.strip()
-
-        if (not m_txt) or (not d_txt) or (not m_txt.isdigit()) or (not d_txt.isdigit()):
-            self._bad_input(focus_widget=self.month_input, clear_date=True)
+    # ---------- Save ----------
+    def on_confirm(self, *_):
+        date_str = self.date_input.text.strip()
+        if not date_str:
+            self._toast("请先填写日期")
             return
 
-        m = int(m_txt)
-        d = int(d_txt)
-
-        if not (1 <= m <= 12) or not (1 <= d <= 31):
-            self._bad_input(focus_widget=self.month_input, clear_date=True)
-            return
-
+        # 简单校验日期格式（尽量不挡用户）
         try:
-            _ = date(self.year, m, d)
+            datetime.strptime(date_str, "%Y-%m-%d")
         except Exception:
-            self._bad_input(focus_widget=self.month_input, clear_date=True)
-            return
+            self._toast("日期格式建议用 YYYY-MM-DD")
+            # 不直接 return，让用户也能继续记录（你也可以改成 return）
 
-        date_std = f"{self.year}-{m:02d}-{d:02d}"
+        records = load_records(self.records_path)
 
-        # ===== 有氧日快捷记录：只要求 日期 + 有氧分钟 =====
-        if getattr(self, "cardio_day_mode", False):
-            mins_txt = self.aerobic_minutes_input.text.strip()
-            if (not mins_txt) or (not mins_txt.isdigit()):
-                self._bad_input(focus_widget=self.aerobic_minutes_input, clear_minutes=True)
+        if self.cardio_mode:
+            mins = self.minutes_input.text.strip()
+            if not mins:
+                self._toast("请填写有氧时间（分钟）")
                 return
-            mins_val = int(mins_txt)
+            record = {
+                "date": date_str,
+                "type": "cardio_day",
+                "text": f"今天是有氧日，有氧时间：{mins}（分钟）",
+                "minutes": int(mins) if mins.isdigit() else mins,
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+            }
+        else:
+            part = self.part_btn.text.strip()
+            quality = self.quality_btn.text.strip()
+            aerobic = self.aerobic_btn.text.strip()
+
+            if part in ("", "未选择") or quality in ("", "未选择") or aerobic in ("", "未选择"):
+                self._toast("请把锻炼部位 / 强度 / 是否有氧 选完整")
+                return
+
+            mins = self.minutes_input.text.strip() if aerobic == "做了" else ""
+            if aerobic == "做了" and not mins:
+                self._toast("有氧选择了“做了”，请填写分钟数")
+                return
 
             record = {
-                "type": "cardio_day",
-                "date": date_std,
-                "cardio_minutes": mins_val,
+                "date": date_str,
+                "type": "normal",
+                "part": part,
+                "quality": quality,
+                "aerobic": aerobic,
+                "minutes": int(mins) if mins.isdigit() else mins,
+                "created_at": datetime.now().isoformat(timespec="seconds"),
             }
 
-            # 如果用户顺手选了部位/质量，也可以存下来（展示时默认不显示）
-            if self.part_value != "未选择":
-                record["part"] = self.part_value
-            if self.quality_value != "未选择":
-                record["quality"] = self.quality_value
+        records.append(record)
+        save_records(self.records_path, records)
 
-            self.app.records.append(record)
-            self.app.save_records()
+        # 提示语：用户要求改为这一句
+        self._toast("今天又进步了，继续加油")
 
-            # 重置表单
-            self.month_input.text = ""
-            self.day_input.text = ""
-            self.set_part("未选择")
-            self.set_quality("未选择")
-            self.aerobic_minutes_input.text = ""
-            self.set_cardio_day_mode(False)
-            self._apply_aerobic_value("没做", from_user=False)
+        # 轻量清空：日期保留由你决定；这里保留日期更方便连续记录
+        if self.cardio_mode:
+            self.minutes_input.text = ""
+        else:
+            self.part_btn.text = "未选择"
+            self.quality_btn.text = "未选择"
+            self.aerobic_btn.text = "未选择"
+            self.minutes_input.text = ""
+            self._show_minutes(False)
 
-            MsgPopup("今天又进步了，继续加油").open()
-            return
-
-        # ===== 普通训练记录：保持原规则 =====
-        if self.part_value == "未选择" or self.quality_value == "未选择":
-            MsgPopup("请先选择训练部位和训练质量").open()
-            return
-
-        mins_val = None
-        if self.aerobic_value == "做了":
-            mins_txt = self.aerobic_minutes_input.text.strip()
-            if (not mins_txt) or (not mins_txt.isdigit()):
-                self._bad_input(focus_widget=self.aerobic_minutes_input, clear_minutes=True)
-                return
-            mins_val = int(mins_txt)
-
-        record = {
-            "type": "workout",
-            "date": date_std,
-            "part": self.part_value,
-            "quality": self.quality_value,
-            "aerobic_done": self.aerobic_value,
-            "aerobic_minutes": mins_val,
-        }
-
-        self.app.records.append(record)
-        self.app.save_records()
-
-        # 重置表单
-        self.month_input.text = ""
-        self.day_input.text = ""
-        self.set_part("未选择")
-        self.set_quality("未选择")
-        self.aerobic_minutes_input.text = ""
-        self.set_cardio_day_mode(False)
-        self._apply_aerobic_value("没做", from_user=False)
-
-        MsgPopup("今天又进步了，继续加油").open()
+    def _toast(self, msg):
+        content = Label(
+            text=msg,
+            font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+            color=BLACK,
+        )
+        pop = Popup(title="", content=content, size_hint=(0.75, 0.25), auto_dismiss=True)
+        pop.open()
+        Clock.schedule_once(lambda *_: pop.dismiss(), 1.0)
 
 
 class RecordsScreen(Screen):
-    def __init__(self, app, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.app = app
 
-        root = BoxLayout(orientation="vertical")
-        apply_bg_rect(root, BG)
+        self.app = App.get_running_app()
+        self.records_path = Path(self.app.user_data_dir) / "records.json"
+
+        self.root_layout = BoxLayout(orientation="vertical", spacing=0)
 
         # AppBar
-        appbar = BoxLayout(orientation="horizontal", size_hint_y=None, height=APPBAR_H, padding=[dp(12), dp(0), dp(12), dp(0)], spacing=dp(8))
-        apply_bg_rect(appbar, PRIMARY)
-
-        back_btn = make_flat_button("←", bg_color=PRIMARY, height=APPBAR_H, font_size=sp(22))
-        back_btn.size_hint_x = None
-        back_btn.width=dp(56)
-        back_btn.bind(on_press=lambda *_: setattr(self.manager, "current", "input"))
-
-        # AppBar 标题居中：左侧加一个等宽占位，让“记录”真正居中
-        title = Label(
-            text="记录",
-            font_name=FONT,
-            font_size=FONT_H2,
-            color=(1, 1, 1, 1),
-            halign="center",
-            valign="middle",
+        self.appbar = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(56))
+        self._apply_solid_bg(self.appbar, WHITE)
+        self.appbar.add_widget(
+            Label(
+                text="记录",
+                font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+                color=BLACK,
+                bold=True,
+                font_size=dp(20),
+            )
         )
-        title.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        self.root_layout.add_widget(self.appbar)
+        self.root_layout.add_widget(Separator())
 
-        right_spacer = Label(size_hint_x=None, width=back_btn.width)  # 右侧占位，和返回按钮等宽
-
-        appbar.add_widget(back_btn)
-        appbar.add_widget(title)
-        appbar.add_widget(right_spacer)
-        root.add_widget(appbar)
-
-        scroll = ScrollView(do_scroll_x=False)
-        self.list_box = BoxLayout(orientation="vertical", padding=[dp(16), dp(16)], spacing=dp(10), size_hint_y=None)
+        # list container
+        self.list_box = GridLayout(cols=1, spacing=dp(10), padding=(dp(16), dp(16)), size_hint_y=None)
         self.list_box.bind(minimum_height=self.list_box.setter("height"))
-        scroll.add_widget(self.list_box)
-        root.add_widget(scroll)
 
-        self.add_widget(root)
+        sv = ScrollView(do_scroll_x=False)
+        sv.add_widget(self.list_box)
+        self.root_layout.add_widget(sv)
 
-    def on_pre_enter(self, *args):
-        self.update_records()
+        # bottom nav
+        self.root_layout.add_widget(Separator())
+        self.nav = self.build_nav(active="records")
+        self.root_layout.add_widget(self.nav)
 
-    def _format_record(self, r):
-        if isinstance(r, str):
-            # 旧字符串尽量不崩（也去掉前后空白）
-            s = r.strip()
-            lines = [ln.strip() for ln in s.splitlines() if ln.strip()]
-            return "\n".join(lines) if lines else s
+        self.add_widget(self.root_layout)
 
-        if not isinstance(r, dict):
-            return str(r)
+        self.bind(on_pre_enter=lambda *_: self.refresh())
 
-        r_type = str(r.get("type", "workout")).strip() or "workout"
+    def _apply_solid_bg(self, widget, rgba):
+        with widget.canvas.before:
+            Color(*rgba)
+            r = Rectangle(pos=widget.pos, size=widget.size)
+        def _u(*_):
+            r.pos = widget.pos
+            r.size = widget.size
+        widget.bind(pos=_u, size=_u)
 
-        d = str(r.get("date", "")).strip()
-        d_cn = d
-        try:
-            yy, mm, dd = d.split("-")
-            mm = f"{int(mm):02d}"
-            dd = f"{int(dd):02d}"
-            d_cn = f"{yy}年{mm}月{dd}日"
-        except Exception:
-            pass
+    def build_nav(self, active="records"):
+        nav = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(58), padding=(dp(10), 0), spacing=dp(10))
+        self._apply_solid_bg(nav, WHITE)
 
-        # 有氧日：只显示日期 + 固定文案
-        if r_type == "cardio_day":
-            mins = r.get("cardio_minutes", r.get("aerobic_minutes", None))
-            mins_text = str(mins) if mins is not None else "?"
-            return f"{d_cn}\n今天是有氧日，有氧时间：{mins_text}（分钟）"
+        def make_nav_btn(title, key):
+            btn = Button(
+                text=title,
+                font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+                font_size=dp(16),
+                background_normal="",
+                background_color=WHITE,
+                color=ACCENT if key == active else BLACK,
+            )
+            def go(_):
+                if key == "home":
+                    self.manager.current = "input"
+                else:
+                    self.manager.current = "records"
+            btn.bind(on_press=go)
+            return btn
 
-        # 普通训练：保持原样式
-        part = str(r.get("part", "")).strip()
-        q = str(r.get("quality", "")).strip()
-        done = str(r.get("aerobic_done", "没做")).strip()
-        mins = r.get("aerobic_minutes", None)
+        nav.add_widget(make_nav_btn("主页", "home"))
+        nav.add_widget(make_nav_btn("记录", "records"))
+        return nav
 
-        if done == "做了":
-            aerobic = f"有氧：做了（{mins}分钟）" if mins is not None else "有氧：做了"
-        else:
-            aerobic = "有氧：没做"
-
-        return f"{d_cn}\n部位：{part}｜质量：{q}\n{aerobic}"
-
-
-    # ✅ 关键修复：每条记录都独立 reflow，不再“只有最后一条正常”
-    def _reflow_item(self, label: Label, *args, item=None):
-        if item is None:
-            return
-        label.text_size = (label.width, None)
-        label.height = label.texture_size[1] + 6
-        item.height = max(92, label.height + 24)
-
-    def update_records(self):
+    def refresh(self):
         self.list_box.clear_widgets()
-        records = list(self.app.records)[::-1]
+        records = load_records(self.records_path)
 
         if not records:
-            empty = Label(text="暂无记录", font_name=FONT, font_size=FONT_BODY, color=MUTED, size_hint_y=None, height=dp(40))
-            self.list_box.add_widget(empty)
+            self.list_box.add_widget(Label(
+                text="暂无记录",
+                font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+                color=BLACK,
+                size_hint_y=None,
+                height=dp(48),
+            ))
             return
 
-        for visual_idx, r in enumerate(records):
-            real_index = len(self.app.records) - 1 - visual_idx
+        # 新的放上面
+        records_sorted = list(reversed(records))
 
-            item = Card(orientation="horizontal", padding=[dp(12), dp(12)], spacing=dp(10), radius=dp(18), size_hint_y=None)
-            item.height=dp(92)
+        for idx_from_end, rec in enumerate(records_sorted):
+            card = SoftCard()
+            card.set_bg(WHITE)
+            card.padding = dp(12)
+            card.spacing = dp(6)
 
-            lab = Label(
-                text=self._format_record(r),
-                font_name=FONT,
-                font_size=sp(15),
-                color=TEXT,
-                halign="left",
-                valign="top",
-                size_hint_x=1,
+            date = rec.get("date", "")
+            rec_type = rec.get("type", "normal")
+
+            title = Label(
+                text=f"[b]{date}[/b]",
+                markup=True,
+                font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+                color=BLACK,
+                font_size=dp(16),
                 size_hint_y=None,
+                height=dp(26),
+                halign="left",
+                valign="middle",
             )
+            title.bind(size=lambda inst, *_: setattr(inst, "text_size", inst.size))
+            card.add_widget(title)
 
-            del_btn = make_flat_button("删除", bg_color=DANGER, height=dp(44), font_size=FONT_BODY)
-            del_btn.size_hint_x = None
-            del_btn.width=dp(72)
-            del_btn.bind(on_press=partial(self.delete_record, real_index))
+            if rec_type == "cardio_day":
+                line = rec.get("text", "今天是有氧日")
+                info = Label(
+                    text=line,
+                    font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+                    color=MUTED_TEXT,
+                    font_size=dp(15),
+                    size_hint_y=None,
+                    height=dp(26),
+                    halign="left",
+                    valign="middle",
+                )
+                info.bind(size=lambda inst, *_: setattr(inst, "text_size", inst.size))
+                card.add_widget(info)
+            else:
+                part = rec.get("part", "")
+                quality = rec.get("quality", "")
+                aerobic = rec.get("aerobic", "")
+                mins = rec.get("minutes", "")
 
-            # ✅ 绑定时把 item 固定住（不再闭包错绑到最后一条）
-            lab.bind(width=partial(self._reflow_item, item=item))
-            lab.bind(texture_size=partial(self._reflow_item, item=item))
+                text = f"{part} / {quality}"
+                if aerobic == "做了":
+                    text += f" / 有氧 {mins} 分钟"
+                else:
+                    text += f" / 无有氧"
 
-            item.add_widget(lab)
-            item.add_widget(del_btn)
-            self.list_box.add_widget(item)
+                info = Label(
+                    text=text,
+                    font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+                    color=MUTED_TEXT,
+                    font_size=dp(15),
+                    size_hint_y=None,
+                    height=dp(26),
+                    halign="left",
+                    valign="middle",
+                )
+                info.bind(size=lambda inst, *_: setattr(inst, "text_size", inst.size))
+                card.add_widget(info)
 
-            # ✅ 每条都单独 schedule（固定 lab/item）
-            Clock.schedule_once(lambda dt, l=lab, it=item: self._reflow_item(l, item=it), 0)
+            # 删除按钮（小一点）
+            btn_row = BoxLayout(size_hint_y=None, height=dp(42))
+            del_btn = Button(
+                text="删除",
+                font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+                font_size=dp(14),
+                background_normal="",
+                background_color=(0.95, 0.30, 0.30, 1),
+                color=WHITE,
+                size_hint_x=None,
+                width=dp(86),
+            )
+            # card 内序号要映射到原列表 index
+            original_index = len(records) - 1 - idx_from_end
 
-    def delete_record(self, real_index, *_):
-        try:
-            del self.app.records[real_index]
-            self.app.save_records()
-            self.update_records()
-            MsgPopup("记录删除成功！").open()
-        except Exception:
-            MsgPopup("删除失败").open()
+            def _make_del(i):
+                def _del(_btn):
+                    self._confirm_delete(i)
+                return _del
+            del_btn.bind(on_press=_make_del(original_index))
+            btn_row.add_widget(Widget())
+            btn_row.add_widget(del_btn)
+            card.add_widget(btn_row)
+
+            self.list_box.add_widget(card)
+
+    def _confirm_delete(self, index):
+        box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10))
+        box.add_widget(Label(
+            text="确定删除这条记录吗？",
+            font_name=APP_FONT_NAME if APP_FONT_NAME else None,
+            color=BLACK,
+        ))
+
+        btns = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(10))
+        cancel = Button(text="取消", background_normal="", background_color=WHITE, color=BLACK)
+        ok = Button(text="删除", background_normal="", background_color=(0.95, 0.30, 0.30, 1), color=WHITE)
+        btns.add_widget(cancel)
+        btns.add_widget(ok)
+        box.add_widget(btns)
+
+        pop = Popup(title="", content=box, size_hint=(0.75, 0.3), auto_dismiss=False)
+        cancel.bind(on_press=lambda *_: pop.dismiss())
+
+        def do_delete(*_):
+            records = load_records(self.records_path)
+            if 0 <= index < len(records):
+                records.pop(index)
+                save_records(self.records_path, records)
+            pop.dismiss()
+            self.refresh()
+
+        ok.bind(on_press=do_delete)
+        pop.open()
 
 
 class FitnessApp(App):
-    @property
-    def records_path(self) -> str:
-        return os.path.join(self.user_data_dir, "records.json")
-
     def build(self):
-        self.records = self.load_records()
-        sm = ScreenManager()
-        sm.add_widget(InputScreen(app=self, name="input"))
-        sm.add_widget(RecordsScreen(app=self, name="records"))
+        sm = ScreenManager(transition=FadeTransition(duration=0.12))
+        sm.add_widget(InputScreen(name="input"))
+        sm.add_widget(RecordsScreen(name="records"))
+        sm.current = "input"
         return sm
-
-    def save_records(self):
-        os.makedirs(self.user_data_dir, exist_ok=True)
-        with open(self.records_path, "w", encoding="utf-8") as f:
-            json.dump(self.records, f, ensure_ascii=False, indent=2)
-
-    def load_records(self):
-        legacy_path = os.path.join(os.getcwd(), "records.json")
-
-        def _load(path):
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data if isinstance(data, list) else []
-
-        try:
-            if os.path.exists(self.records_path):
-                return _load(self.records_path)
-
-            if os.path.exists(legacy_path):
-                data = _load(legacy_path)
-                os.makedirs(self.user_data_dir, exist_ok=True)
-                with open(self.records_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                return data
-
-            return []
-        except (FileNotFoundError, JSONDecodeError):
-            return []
-        except Exception:
-            return []
 
 
 if __name__ == "__main__":
