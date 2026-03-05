@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 """
 Kivy 健身记录 App（桌面/安卓）
@@ -89,7 +88,7 @@ def try_register_font():
 
 
 
-APP_FONT_NAME = try_register_font()
+APP_FONT_NAME = try_register_font() or "Roboto"
 
 
 def load_records(records_path: Path):
