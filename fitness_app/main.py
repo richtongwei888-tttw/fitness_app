@@ -1,3 +1,4 @@
+
 import os
 import json
 from json import JSONDecodeError
@@ -272,7 +273,7 @@ class ChoicePopup(ModalView):
                 opt,
                 bg_color=(0.92, 0.94, 0.98, 1),
                 text_color=TEXT,
-                height=dp(52),
+                height=dp(48),
                 font_size=FONT_BODY,
             )
             b.bind(on_press=lambda inst, v=opt: self._pick(v, on_pick))
@@ -282,7 +283,7 @@ class ChoicePopup(ModalView):
         scroll.add_widget(box)
         body.add_widget(scroll)
 
-        cancel = make_flat_button("取消", bg_color=(0.75, 0.75, 0.78, 1), text_color=TEXT, height=dp(52), font_size=FONT_BODY)
+        cancel = make_flat_button("取消", bg_color=(0.75, 0.75, 0.78, 1), text_color=TEXT, height=dp(48), font_size=FONT_BODY)
         cancel.bind(on_press=lambda *_: self.dismiss())
         body.add_widget(cancel)
 
@@ -337,9 +338,6 @@ class InputScreen(Screen):
         self.form_card = Card(orientation="vertical", padding=dp(14), spacing=dp(10), radius=dp(18), size_hint_y=None)
         content.add_widget(self.form_card)
 
-        # 表单内容变化（比如“有氧分钟”显示/隐藏）时，跟随更新卡片高度
-        self.form_card.bind(minimum_height=self._request_form_sync)
-
         # 适配：表单区域至少占屏幕 1/3 高度（更好点按）
         # 用 request + schedule 的方式，避免布局过程多次触发造成重入/闪退
         Window.bind(size=self._request_form_sync)
@@ -384,6 +382,14 @@ class InputScreen(Screen):
         self.aerobic_value = "没做"
         self.aerobic_btn = self._make_select_row("是否有氧", self.aerobic_value, self.open_aerobic_picker)
 
+        # “今天是有氧日”快捷记录（record_type = cardio_day）
+        # 目的：只填日期 + 有氧分钟即可添加记录，并在列表页显示固定文案。
+        self.cardio_day_mode = False
+        self._aerobic_locked = False
+        self._aerobic_prev_before_cardio_day = self.aerobic_value
+
+        self.cardio_day_btn = self._make_select_row("今天是有氧日", "未开启", self.toggle_cardio_day)
+
         # 有氧分钟行（默认不显示）
         self.minutes_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(56))
         lab_min = Label(
@@ -419,10 +425,6 @@ class InputScreen(Screen):
         btn_area.add_widget(view_btn)
         root.add_widget(btn_area)
 
-
-        # 初始化完成后再同步一次（此时 minimum_height 已稳定）
-        self._request_form_sync()
-
         self.add_widget(root)
 
     def _make_select_row(self, label_text, default_value, on_press):
@@ -444,7 +446,7 @@ class InputScreen(Screen):
             default_value,
             bg_color=(0.92, 0.94, 0.98, 1),
             text_color=TEXT,
-            height=FIELD_H,  # 更大触控面积
+            height=dp(42),
             font_size=FONT_BODY,
         )
         btn.size_hint_x = 1
@@ -471,13 +473,20 @@ class InputScreen(Screen):
         self.quality_btn.text = v
 
     def open_aerobic_picker(self, *_):
+        # “今天是有氧日”模式下强制为“做了”，避免两套逻辑打架
+        if getattr(self, "_aerobic_locked", False):
+            return
         ChoicePopup("是否做有氧", ["没做", "做了"], on_pick=self.set_aerobic).open()
 
-    def set_aerobic(self, v):
+    def _apply_aerobic_value(self, v: str, *, from_user: bool = True):
+        if from_user and getattr(self, "_aerobic_locked", False):
+            return
+
         self.aerobic_value = v
         self.aerobic_btn.text = v
 
-        if v == "做了":
+        need_minutes = (v == "做了") or getattr(self, "cardio_day_mode", False)
+        if need_minutes:
             if self.minutes_row.parent is None:
                 self.form_card.add_widget(self.minutes_row)
         else:
@@ -485,9 +494,44 @@ class InputScreen(Screen):
             if self.minutes_row.parent is not None:
                 self.form_card.remove_widget(self.minutes_row)
 
-        # 触发布局同步：保证表单卡片不会裁切内容
         self._request_form_sync()
 
+    def set_aerobic(self, v):
+        self._apply_aerobic_value(v, from_user=True)
+
+    def toggle_cardio_day(self, *_):
+        self.set_cardio_day_mode(not getattr(self, "cardio_day_mode", False))
+
+    def set_cardio_day_mode(self, enabled: bool):
+        enabled = bool(enabled)
+        if enabled == getattr(self, "cardio_day_mode", False):
+            return
+
+        self.cardio_day_mode = enabled
+
+        if enabled:
+            # 记住进入“有氧日”前的选择，关闭时可恢复
+            self._aerobic_prev_before_cardio_day = self.aerobic_value
+
+            # 锁定“是否有氧”为“做了”，避免与“有氧日”模式冲突
+            self._aerobic_locked = True
+            self.aerobic_btn.disabled = True
+            self.cardio_day_btn.text = "已开启"
+
+            # 强制展示“有氧分钟”输入
+            self._apply_aerobic_value("做了", from_user=False)
+
+            # 聚焦到分钟输入（更顺手）
+            Clock.schedule_once(lambda dt: setattr(self.aerobic_minutes_input, "focus", True), 0)
+        else:
+            self._aerobic_locked = False
+            self.aerobic_btn.disabled = False
+            self.cardio_day_btn.text = "未开启"
+
+            prev = getattr(self, "_aerobic_prev_before_cardio_day", "没做") or "没做"
+            self._apply_aerobic_value(prev, from_user=False)
+
+        self._request_form_sync()
     def _bad_input(self, focus_widget=None, clear_date=False, clear_minutes=False):
         if clear_date:
             self.month_input.text = ""
@@ -521,6 +565,44 @@ class InputScreen(Screen):
             self._bad_input(focus_widget=self.month_input, clear_date=True)
             return
 
+        date_std = f"{self.year}-{m:02d}-{d:02d}"
+
+        # ===== 有氧日快捷记录：只要求 日期 + 有氧分钟 =====
+        if getattr(self, "cardio_day_mode", False):
+            mins_txt = self.aerobic_minutes_input.text.strip()
+            if (not mins_txt) or (not mins_txt.isdigit()):
+                self._bad_input(focus_widget=self.aerobic_minutes_input, clear_minutes=True)
+                return
+            mins_val = int(mins_txt)
+
+            record = {
+                "type": "cardio_day",
+                "date": date_std,
+                "cardio_minutes": mins_val,
+            }
+
+            # 如果用户顺手选了部位/质量，也可以存下来（展示时默认不显示）
+            if self.part_value != "未选择":
+                record["part"] = self.part_value
+            if self.quality_value != "未选择":
+                record["quality"] = self.quality_value
+
+            self.app.records.append(record)
+            self.app.save_records()
+
+            # 重置表单
+            self.month_input.text = ""
+            self.day_input.text = ""
+            self.set_part("未选择")
+            self.set_quality("未选择")
+            self.aerobic_minutes_input.text = ""
+            self.set_cardio_day_mode(False)
+            self._apply_aerobic_value("没做", from_user=False)
+
+            MsgPopup("今天又进步了，继续加油").open()
+            return
+
+        # ===== 普通训练记录：保持原规则 =====
         if self.part_value == "未选择" or self.quality_value == "未选择":
             MsgPopup("请先选择训练部位和训练质量").open()
             return
@@ -533,25 +615,28 @@ class InputScreen(Screen):
                 return
             mins_val = int(mins_txt)
 
-        date_std = f"{self.year}-{m:02d}-{d:02d}"
         record = {
+            "type": "workout",
             "date": date_std,
             "part": self.part_value,
             "quality": self.quality_value,
             "aerobic_done": self.aerobic_value,
-            "aerobic_minutes": mins_val
+            "aerobic_minutes": mins_val,
         }
 
         self.app.records.append(record)
         self.app.save_records()
 
+        # 重置表单
         self.month_input.text = ""
         self.day_input.text = ""
         self.set_part("未选择")
         self.set_quality("未选择")
-        self.set_aerobic("没做")
+        self.aerobic_minutes_input.text = ""
+        self.set_cardio_day_mode(False)
+        self._apply_aerobic_value("没做", from_user=False)
 
-        MsgPopup("记录添加成功！").open()
+        MsgPopup("今天又进步了，继续加油").open()
 
 
 class RecordsScreen(Screen):
@@ -607,12 +692,12 @@ class RecordsScreen(Screen):
             lines = [ln.strip() for ln in s.splitlines() if ln.strip()]
             return "\n".join(lines) if lines else s
 
-        d = str(r.get("date", "")).strip()
-        part = str(r.get("part", "")).strip()
-        q = str(r.get("quality", "")).strip()
-        done = str(r.get("aerobic_done", "没做")).strip()
-        mins = r.get("aerobic_minutes", None)
+        if not isinstance(r, dict):
+            return str(r)
 
+        r_type = str(r.get("type", "workout")).strip() or "workout"
+
+        d = str(r.get("date", "")).strip()
         d_cn = d
         try:
             yy, mm, dd = d.split("-")
@@ -622,12 +707,25 @@ class RecordsScreen(Screen):
         except Exception:
             pass
 
+        # 有氧日：只显示日期 + 固定文案
+        if r_type == "cardio_day":
+            mins = r.get("cardio_minutes", r.get("aerobic_minutes", None))
+            mins_text = str(mins) if mins is not None else "?"
+            return f"{d_cn}\n今天是有氧日，有氧时间：{mins_text}（分钟）"
+
+        # 普通训练：保持原样式
+        part = str(r.get("part", "")).strip()
+        q = str(r.get("quality", "")).strip()
+        done = str(r.get("aerobic_done", "没做")).strip()
+        mins = r.get("aerobic_minutes", None)
+
         if done == "做了":
             aerobic = f"有氧：做了（{mins}分钟）" if mins is not None else "有氧：做了"
         else:
             aerobic = "有氧：没做"
 
         return f"{d_cn}\n部位：{part}｜质量：{q}\n{aerobic}"
+
 
     # ✅ 关键修复：每条记录都独立 reflow，不再“只有最后一条正常”
     def _reflow_item(self, label: Label, *args, item=None):
