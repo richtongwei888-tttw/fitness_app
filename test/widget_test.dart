@@ -1,7 +1,10 @@
 import 'dart:io';
 
+import 'package:fitness_app/database/food_template_repository.dart';
 import 'package:fitness_app/database/meal_food_record_repository.dart';
 import 'package:fitness_app/main.dart';
+import 'package:fitness_app/models/food_template.dart';
+import 'package:fitness_app/models/food_unit_type.dart';
 import 'package:fitness_app/models/meal_food_record.dart';
 import 'package:fitness_app/models/user_profile.dart';
 import 'package:fitness_app/services/nutrition_target_calculator.dart';
@@ -23,6 +26,27 @@ class _FakeMealFoodRecordRepository implements MealFoodRecordRepository {
 
   @override
   Future<int> updateRecord(MealFoodRecord record) async => 1;
+}
+
+class _FakeFoodTemplateRepository implements FoodTemplateRepository {
+  _FakeFoodTemplateRepository(this.templates);
+
+  final List<FoodTemplate> templates;
+
+  @override
+  Future<int> addTemplate(FoodTemplate template) async {
+    templates.add(template);
+    return templates.length;
+  }
+
+  @override
+  Future<int> deleteTemplate(int id) async {
+    templates.removeWhere((template) => template.id == id);
+    return 1;
+  }
+
+  @override
+  Future<List<FoodTemplate>> getAll() async => List<FoodTemplate>.of(templates);
 }
 
 class _FakeUserProfileStore implements UserProfileStore {
@@ -130,6 +154,82 @@ void main() {
     expect(find.text('第六餐'), findsOneWidget);
   });
 
+  testWidgets('FoodSelectionPage filters saved foods by search keyword', (
+    WidgetTester tester,
+  ) async {
+    final templates = <FoodTemplate>[
+      const FoodTemplate(
+        id: 1,
+        name: '鸡胸肉',
+        unitType: FoodUnitType.per100g,
+        carbs: 0,
+        protein: 24,
+        fat: 2,
+        createdAt: '2026-05-14T00:00:00',
+      ),
+      const FoodTemplate(
+        id: 2,
+        name: 'Egg',
+        unitType: FoodUnitType.perServing,
+        carbs: 1,
+        protein: 6,
+        fat: 5,
+        createdAt: '2026-05-14T00:00:00',
+      ),
+      const FoodTemplate(
+        id: 3,
+        name: '牛奶',
+        unitType: FoodUnitType.per100g,
+        carbs: 5,
+        protein: 3,
+        fat: 3,
+        createdAt: '2026-05-14T00:00:00',
+      ),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FoodSelectionPage(
+          mealIndex: 1,
+          mealLabel: '早餐',
+          selectedDate: DateTime(2026, 5, 14),
+          templateRepository: _FakeFoodTemplateRepository(templates),
+          recordRepository: _FakeMealFoodRecordRepository(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('鸡胸肉'), findsOneWidget);
+    expect(find.text('Egg'), findsOneWidget);
+    expect(find.text('牛奶'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).first, '鸡');
+    await tester.pumpAndSettle();
+
+    expect(find.text('鸡胸肉'), findsOneWidget);
+    expect(find.text('Egg'), findsNothing);
+    expect(find.text('牛奶'), findsNothing);
+
+    await tester.enterText(find.byType(TextField).first, 'egg');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Egg'), findsOneWidget);
+    expect(find.text('鸡胸肉'), findsNothing);
+
+    await tester.enterText(find.byType(TextField).first, '不存在');
+    await tester.pumpAndSettle();
+
+    expect(find.text('没有找到相关食物'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).first, '');
+    await tester.pumpAndSettle();
+
+    expect(find.text('鸡胸肉'), findsOneWidget);
+    expect(find.text('Egg'), findsOneWidget);
+    expect(find.text('牛奶'), findsOneWidget);
+  });
+
   testWidgets('ProfilePage defaults to guest and updates nickname', (
     WidgetTester tester,
   ) async {
@@ -197,5 +297,40 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.byIcon(Icons.person_rounded), findsOneWidget);
     expect(store.profile.avatarPath, isNull);
+  });
+
+  testWidgets('ProfilePage shows initial persisted avatar during rebuild', (
+    WidgetTester tester,
+  ) async {
+    final tempDirectory = Directory.systemTemp.createTempSync(
+      'profile_avatar_rebuild_test_',
+    );
+    addTearDown(() {
+      if (tempDirectory.existsSync()) {
+        tempDirectory.deleteSync(recursive: true);
+      }
+    });
+
+    final avatarFile = File(
+      '${tempDirectory.path}${Platform.pathSeparator}profile_avatar.jpg',
+    )..writeAsBytesSync(<int>[1, 2, 3, 4]);
+    final profile = UserProfile(avatarPath: avatarFile.path);
+    final store = _FakeUserProfileStore(initialProfile: profile);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ProfilePage(initialProfile: profile, profileStore: store),
+        ),
+      ),
+    );
+
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.byIcon(Icons.person_rounded), findsNothing);
+
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(Image), findsOneWidget);
   });
 }

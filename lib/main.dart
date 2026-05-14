@@ -677,6 +677,7 @@ class _HomePageState extends State<HomePage> {
       ),
       const TrainingPage(),
       ProfilePage(
+        initialProfile: _userProfile,
         onProfileChanged: (profile) {
           setState(() {
             _userProfile = profile;
@@ -2770,6 +2771,7 @@ class FoodSelectionPage extends StatefulWidget {
 }
 
 class _FoodSelectionPageState extends State<FoodSelectionPage> {
+  final TextEditingController _searchController = TextEditingController();
   bool _isLoading = true;
   bool _hasAddedFood = false;
   List<FoodTemplate> _templates = <FoodTemplate>[];
@@ -2782,13 +2784,37 @@ class _FoodSelectionPageState extends State<FoodSelectionPage> {
   MealFoodRecordRepository get _recordRepository =>
       widget.recordRepository ?? DatabaseMealFoodRecordRepository.instance;
 
+  List<FoodTemplate> get _filteredTemplates {
+    final keyword = _searchController.text.trim().toLowerCase();
+    if (keyword.isEmpty) {
+      return _templates;
+    }
+
+    return _templates.where((template) {
+      return template.name.toLowerCase().contains(keyword);
+    }).toList();
+  }
+
   @override
   void initState() {
     super.initState();
     _currentMealIndex = widget.mealIndex;
     _currentMealLabel = widget.mealLabel;
     _currentDateKey = DateFormat('yyyy-MM-dd').format(widget.selectedDate);
+    _searchController.addListener(_handleSearchChanged);
     _loadTemplates();
+  }
+
+  @override
+  void dispose() {
+    _searchController
+      ..removeListener(_handleSearchChanged)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _handleSearchChanged() {
+    setState(() {});
   }
 
   void _closePage() {
@@ -2908,6 +2934,9 @@ class _FoodSelectionPageState extends State<FoodSelectionPage> {
 
   @override
   Widget build(BuildContext context) {
+    final filteredTemplates = _filteredTemplates;
+    final hasSearchKeyword = _searchController.text.trim().isNotEmpty;
+
     return PopScope<bool>(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
@@ -2931,6 +2960,10 @@ class _FoodSelectionPageState extends State<FoodSelectionPage> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                child: _FoodSearchField(controller: _searchController),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: _CreateFoodEntryCard(onTap: _showCreateFoodDialog),
               ),
               if (_isLoading)
@@ -2942,10 +2975,10 @@ class _FoodSelectionPageState extends State<FoodSelectionPage> {
                 child: ListView.separated(
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                  itemCount: _templates.length,
+                  itemCount: filteredTemplates.length,
                   separatorBuilder: (_, index) => const SizedBox(height: 12),
                   itemBuilder: (context, index) {
-                    final template = _templates[index];
+                    final template = filteredTemplates[index];
                     return _FoodTemplateCard(
                       template: template,
                       onTap: () => _handleTemplateTap(template),
@@ -2953,13 +2986,63 @@ class _FoodSelectionPageState extends State<FoodSelectionPage> {
                   },
                 ),
               ),
-              if (!_isLoading && _templates.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(24, 0, 24, 32),
-                  child: Text('还没有已保存食物', style: TextStyle(fontSize: 15)),
+              if (!_isLoading && filteredTemplates.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
+                  child: Text(
+                    hasSearchKeyword ? '没有找到相关食物' : '还没有已保存食物',
+                    style: const TextStyle(fontSize: 15),
+                  ),
                 ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FoodSearchField extends StatelessWidget {
+  const _FoodSearchField({required this.controller});
+
+  final TextEditingController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return TextField(
+      controller: controller,
+      textInputAction: TextInputAction.search,
+      decoration: InputDecoration(
+        hintText: '搜索食物',
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: controller.text.isEmpty
+            ? null
+            : IconButton(
+                onPressed: controller.clear,
+                icon: const Icon(Icons.close_rounded),
+                tooltip: '清空搜索',
+              ),
+        filled: true,
+        fillColor: Colors.white.withValues(alpha: 0.86),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 14,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide(
+            color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide(color: colorScheme.primary, width: 1.4),
         ),
       ),
     );
@@ -3940,7 +4023,7 @@ class _TrainingPageState extends State<TrainingPage> {
   }
 }
 
-class _MuscleToggleChip extends StatelessWidget {
+class _MuscleToggleChip extends StatefulWidget {
   const _MuscleToggleChip({
     required this.label,
     required this.selected,
@@ -3952,21 +4035,68 @@ class _MuscleToggleChip extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
+  State<_MuscleToggleChip> createState() => _MuscleToggleChipState();
+}
+
+class _MuscleToggleChipState extends State<_MuscleToggleChip>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _fillController;
+  late final Animation<double> _fillAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _fillController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 560),
+      value: widget.selected ? 1 : 0,
+    );
+    _fillAnimation = CurvedAnimation(
+      parent: _fillController,
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _MuscleToggleChip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selected == oldWidget.selected) {
+      return;
+    }
+
+    if (widget.selected) {
+      _fillController.forward(from: 0);
+    } else {
+      _fillController.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _fillController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final textStyle =
+        Theme.of(context).textTheme.titleSmall ?? const TextStyle();
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: onTap,
+        onTap: widget.onTap,
         borderRadius: _sunnyPillRadius,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 400),
-          curve: Curves.easeOutBack,
+          curve: Curves.easeOutCubic,
           decoration: BoxDecoration(
-            // Base color stays stable; the selected orange "liquid" animates separately.
             color: Colors.white.withValues(alpha: 0.82),
             borderRadius: _sunnyPillRadius,
-            border: Border.all(color: selected ? _sunOrangeDeep : _sunWarmGrey),
-            boxShadow: selected
+            border: Border.all(
+              color: widget.selected ? _sunOrangeDeep : _sunWarmGrey,
+            ),
+            boxShadow: widget.selected
                 ? _sunnyShadow(_sunOrange)
                 : _sunnyShadow(const Color(0xFFCBEAFF)),
           ),
@@ -3976,16 +4106,35 @@ class _MuscleToggleChip extends StatelessWidget {
               alignment: Alignment.center,
               children: [
                 Positioned.fill(
-                  child: AnimatedScale(
-                    scale: selected ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 400),
-                    curve: Curves.easeOutBack,
-                    alignment: Alignment.center,
-                    child: const DecoratedBox(
-                      decoration: BoxDecoration(color: _sunOrange),
-                    ),
+                  child: AnimatedBuilder(
+                    animation: _fillAnimation,
+                    builder: (context, child) {
+                      return CustomPaint(
+                        painter: _MuscleLiquidFillPainter(
+                          progress: _fillAnimation.value,
+                          color: _sunOrange,
+                        ),
+                      );
+                    },
                   ),
                 ),
+                if (widget.selected)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: AnimatedBuilder(
+                        animation: _fillAnimation,
+                        builder: (context, child) {
+                          return DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(
+                                alpha: 0.08 * _fillAnimation.value,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
                 Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
@@ -3994,14 +4143,11 @@ class _MuscleToggleChip extends StatelessWidget {
                   child: AnimatedDefaultTextStyle(
                     duration: const Duration(milliseconds: 400),
                     curve: Curves.easeOutBack,
-                    style:
-                        (Theme.of(context).textTheme.titleSmall ??
-                                const TextStyle())
-                            .copyWith(
-                              color: selected ? Colors.white : _sunInk,
-                              fontWeight: FontWeight.w700,
-                            ),
-                    child: Text(label),
+                    style: textStyle.copyWith(
+                      color: widget.selected ? Colors.white : _sunInk,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    child: Text(widget.label),
                   ),
                 ),
               ],
@@ -4010,6 +4156,57 @@ class _MuscleToggleChip extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _MuscleLiquidFillPainter extends CustomPainter {
+  const _MuscleLiquidFillPainter({required this.progress, required this.color});
+
+  final double progress;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progress <= 0) {
+      return;
+    }
+
+    final center = Offset(size.width / 2, size.height / 2);
+    final maxRadius = math.sqrt(
+      size.width * size.width + size.height * size.height,
+    );
+    final baseRadius = maxRadius * progress;
+    final waveStrength = (1 - progress).clamp(0.0, 1.0);
+    final waveAmplitude =
+        math.max(1.6, size.shortestSide * 0.045) * (0.35 + waveStrength * 0.65);
+    final phase = progress * math.pi * 3.0;
+    const pointCount = 56;
+
+    final path = Path();
+    for (var index = 0; index < pointCount; index += 1) {
+      final angle = (math.pi * 2 * index) / pointCount;
+      final wave =
+          math.sin(angle * 4 + phase) * 0.65 +
+          math.sin(angle * 7 - phase * 0.7) * 0.35;
+      final radius = baseRadius + wave * waveAmplitude;
+      final point = Offset(
+        center.dx + math.cos(angle) * radius,
+        center.dy + math.sin(angle) * radius,
+      );
+      if (index == 0) {
+        path.moveTo(point.dx, point.dy);
+      } else {
+        path.lineTo(point.dx, point.dy);
+      }
+    }
+    path.close();
+
+    canvas.drawPath(path, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MuscleLiquidFillPainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.color != color;
   }
 }
 
@@ -4501,11 +4698,13 @@ class _LegacyProfilePage extends StatelessWidget {
 class ProfilePage extends StatefulWidget {
   const ProfilePage({
     super.key,
+    this.initialProfile = const UserProfile(),
     this.profileStore,
     this.imagePicker,
     this.onProfileChanged,
   });
 
+  final UserProfile initialProfile;
   final UserProfileStore? profileStore;
   final ImagePicker? imagePicker;
   final ValueChanged<UserProfile>? onProfileChanged;
@@ -4522,13 +4721,14 @@ class _ProfilePageState extends State<ProfilePage> {
   late final UserProfileStore _profileStore;
   late final ImagePicker _imagePicker;
 
-  UserProfile _profile = const UserProfile();
+  late UserProfile _profile;
   bool _isLoading = true;
   bool _isSavingAvatar = false;
 
   @override
   void initState() {
     super.initState();
+    _profile = widget.initialProfile;
     _profileStore =
         widget.profileStore ?? SharedPreferencesUserProfileStore.instance;
     _imagePicker = widget.imagePicker ?? ImagePicker();
