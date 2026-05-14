@@ -1,0 +1,38 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flutter: Current Device",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "debug"
+    },
+    {
+      "name": "Flutter: Android Emulator",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "debug",
+      "deviceId": "emulator-5554",
+      "toolArgs": [
+        "--device-timeout",
+        "20"
+      ]
+    },
+    {
+      "name": "Flutter: Android Emulator (Software Rendering)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "debug",
+      "deviceId": "emulator-5554",
+      "toolArgs": [
+        "--device-timeout",
+        "20",
+        "--enable-software-rendering",
+        "--no-enable-impeller"
+      ]
+    }
+  ]
+}
