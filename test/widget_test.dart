@@ -5,9 +5,11 @@ import 'package:fitness_app/database/meal_food_record_repository.dart';
 import 'package:fitness_app/main.dart';
 import 'package:fitness_app/models/food_template.dart';
 import 'package:fitness_app/models/food_unit_type.dart';
+import 'package:fitness_app/models/local_user.dart';
 import 'package:fitness_app/models/meal_food_record.dart';
 import 'package:fitness_app/models/user_profile.dart';
 import 'package:fitness_app/services/nutrition_target_calculator.dart';
+import 'package:fitness_app/storage/local_auth_store.dart';
 import 'package:fitness_app/storage/user_profile_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -86,16 +88,60 @@ class _FakeUserProfileStore implements UserProfileStore {
   }
 }
 
+class _FakeLocalAuthStore extends LocalAuthStore {
+  _FakeLocalAuthStore({required this.isGuest, LocalUser? user}) : _user = user;
+
+  final bool isGuest;
+  LocalUser? _user;
+
+  LocalUser? get user => _user;
+
+  @override
+  Future<bool> isGuestSession() async => isGuest;
+
+  @override
+  Future<LocalUser?> loadCurrentUser() async => isGuest ? null : _user;
+
+  @override
+  Future<LocalUser> updateCurrentUsername(String username) async {
+    final current = _user;
+    if (isGuest || current == null) {
+      throw const LocalAuthException('游客模式不能修改用户名');
+    }
+    _user = current.copyWith(username: username.trim());
+    return _user!;
+  }
+
+  @override
+  Future<LocalUser?> updateCurrentAvatarPath(String? avatarPath) async {
+    final current = _user;
+    if (isGuest || current == null) {
+      return null;
+    }
+    _user = current.copyWith(
+      avatarPath: avatarPath,
+      clearAvatar: avatarPath == null || avatarPath.isEmpty,
+    );
+    return _user;
+  }
+}
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
   });
 
+  Future<void> pumpAppAsGuest(WidgetTester tester) async {
+    await tester.pumpWidget(const FitnessApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('游客体验'));
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('FitnessApp boots into the current HomePage', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(const FitnessApp());
-    await tester.pump();
+    await pumpAppAsGuest(tester);
 
     expect(tester.takeException(), isNull);
     expect(find.byType(HomePage), findsOneWidget);
@@ -109,8 +155,7 @@ void main() {
   testWidgets('HomePage navigates to the current diet page', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(const FitnessApp());
-    await tester.pump();
+    await pumpAppAsGuest(tester);
 
     await tester.tap(find.text('饮食'));
     await tester.pump();
@@ -230,15 +275,27 @@ void main() {
     expect(find.text('牛奶'), findsOneWidget);
   });
 
-  testWidgets('ProfilePage defaults to guest and updates nickname', (
+  testWidgets('ProfilePage updates registered username', (
     WidgetTester tester,
   ) async {
     final store = _FakeUserProfileStore();
+    final authStore = _FakeLocalAuthStore(
+      isGuest: false,
+      user: const LocalUser(
+        userId: 'user_test',
+        username: 'user',
+        email: 'user@example.com',
+        password: '1234',
+        createdAt: '2026-05-15 00:00:00',
+      ),
+    );
 
     Future<void> pumpProfilePage() {
       return tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(body: ProfilePage(profileStore: store)),
+          home: Scaffold(
+            body: ProfilePage(profileStore: store, authStore: authStore),
+          ),
         ),
       );
     }
@@ -246,12 +303,31 @@ void main() {
     await pumpProfilePage();
     await tester.pumpAndSettle();
 
-    expect(find.text(UserProfile.guestName), findsOneWidget);
+    expect(find.text('user'), findsOneWidget);
     expect(find.byIcon(Icons.person_rounded), findsOneWidget);
     expect(find.text('个人信息'), findsOneWidget);
 
-    await tester.tap(find.text(UserProfile.guestName));
+    await tester.tap(find.text('user'));
     await tester.pumpAndSettle();
+
+    if (find.byType(AlertDialog).evaluate().isNotEmpty) {
+      expect(find.text('编辑用户名'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), '小明');
+      await tester.tap(find.text('保存'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('小明'), findsOneWidget);
+      expect(authStore.user?.username, '小明');
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+
+      await pumpProfilePage();
+      await tester.pumpAndSettle();
+
+      expect(find.text('小明'), findsOneWidget);
+      return;
+    }
 
     expect(find.text('编辑昵称'), findsOneWidget);
     await tester.enterText(find.byType(TextField), '小明');
@@ -267,6 +343,33 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('小明'), findsOneWidget);
+  });
+
+  testWidgets('ProfilePage keeps guest profile read-only', (
+    WidgetTester tester,
+  ) async {
+    final authStore = _FakeLocalAuthStore(isGuest: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ProfilePage(
+            profileStore: _FakeUserProfileStore(),
+            authStore: authStore,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text(UserProfile.guestName), findsOneWidget);
+    expect(find.byIcon(Icons.person_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.edit_outlined), findsNothing);
+
+    await tester.tap(find.text(UserProfile.guestName));
+    await tester.pumpAndSettle();
+
+    expect(find.text('编辑用户名'), findsNothing);
   });
 
   testWidgets('ProfilePage clears missing persisted avatar path', (
@@ -286,10 +389,22 @@ void main() {
     final store = _FakeUserProfileStore(
       initialProfile: UserProfile(avatarPath: missingAvatarPath),
     );
+    final authStore = _FakeLocalAuthStore(
+      isGuest: false,
+      user: const LocalUser(
+        userId: 'user_avatar_missing',
+        username: 'user',
+        email: 'user@example.com',
+        password: '1234',
+        createdAt: '2026-05-15 00:00:00',
+      ),
+    );
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(body: ProfilePage(profileStore: store)),
+        home: Scaffold(
+          body: ProfilePage(profileStore: store, authStore: authStore),
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -316,11 +431,26 @@ void main() {
     )..writeAsBytesSync(<int>[1, 2, 3, 4]);
     final profile = UserProfile(avatarPath: avatarFile.path);
     final store = _FakeUserProfileStore(initialProfile: profile);
+    final authStore = _FakeLocalAuthStore(
+      isGuest: false,
+      user: LocalUser(
+        userId: 'user_avatar_saved',
+        username: 'user',
+        email: 'user@example.com',
+        password: '1234',
+        avatarPath: avatarFile.path,
+        createdAt: '2026-05-15 00:00:00',
+      ),
+    );
 
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: ProfilePage(initialProfile: profile, profileStore: store),
+          body: ProfilePage(
+            initialProfile: profile,
+            profileStore: store,
+            authStore: authStore,
+          ),
         ),
       ),
     );

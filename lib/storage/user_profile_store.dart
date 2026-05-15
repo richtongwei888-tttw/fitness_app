@@ -1,6 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/user_profile.dart';
+import 'auth_session_store.dart';
 
 abstract class UserProfileStore {
   Future<UserProfile> loadProfile();
@@ -28,22 +29,32 @@ class SharedPreferencesUserProfileStore implements UserProfileStore {
   static const String _ageKey = 'profile_age';
   static const String _heightCmKey = 'profile_height_cm';
 
+  Future<String> _key(String key) async {
+    final userId = await AuthSessionStore.effectiveUserId();
+    return AuthSessionStore.scopedKey(userId, key);
+  }
+
   @override
   Future<UserProfile> loadProfile() async {
     final preferences = await SharedPreferences.getInstance();
+    final nicknameKey = await _key(_nicknameKey);
+    final avatarPathKey = await _key(_avatarPathKey);
+    final genderKey = await _key(_genderKey);
+    final ageKey = await _key(_ageKey);
+    final heightCmKey = await _key(_heightCmKey);
     return UserProfile(
-      nickname: preferences.getString(_nicknameKey) ?? '',
-      avatarPath: preferences.getString(_avatarPathKey),
-      gender: userGenderFromStorage(preferences.getString(_genderKey)),
-      age: preferences.getInt(_ageKey),
-      heightCm: preferences.getDouble(_heightCmKey),
+      nickname: preferences.getString(nicknameKey) ?? '',
+      avatarPath: preferences.getString(avatarPathKey),
+      gender: userGenderFromStorage(preferences.getString(genderKey)),
+      age: preferences.getInt(ageKey),
+      heightCm: preferences.getDouble(heightCmKey),
     );
   }
 
   @override
   Future<UserProfile> saveNickname(String nickname) async {
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(_nicknameKey, nickname);
+    await preferences.setString(await _key(_nicknameKey), nickname);
     final current = await loadProfile();
     return current.copyWith(nickname: nickname);
   }
@@ -51,10 +62,11 @@ class SharedPreferencesUserProfileStore implements UserProfileStore {
   @override
   Future<UserProfile> saveAvatarPath(String? avatarPath) async {
     final preferences = await SharedPreferences.getInstance();
+    final avatarPathKey = await _key(_avatarPathKey);
     if (avatarPath == null || avatarPath.isEmpty) {
-      await preferences.remove(_avatarPathKey);
+      await preferences.remove(avatarPathKey);
     } else {
-      await preferences.setString(_avatarPathKey, avatarPath);
+      await preferences.setString(avatarPathKey, avatarPath);
     }
     final current = await loadProfile();
     return current.copyWith(
@@ -70,15 +82,11 @@ class SharedPreferencesUserProfileStore implements UserProfileStore {
     required double heightCm,
   }) async {
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(_genderKey, gender.storageValue);
-    await preferences.setInt(_ageKey, age);
-    await preferences.setDouble(_heightCmKey, heightCm);
+    await preferences.setString(await _key(_genderKey), gender.storageValue);
+    await preferences.setInt(await _key(_ageKey), age);
+    await preferences.setDouble(await _key(_heightCmKey), heightCm);
 
     final current = await loadProfile();
-    return current.copyWith(
-      gender: gender,
-      age: age,
-      heightCm: heightCm,
-    );
+    return current.copyWith(gender: gender, age: age, heightCm: heightCm);
   }
 }

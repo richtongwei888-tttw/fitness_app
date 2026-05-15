@@ -23,6 +23,8 @@ import 'models/meal_food_record.dart';
 import 'models/training_record.dart';
 import 'models/user_profile.dart';
 import 'services/nutrition_target_calculator.dart';
+import 'storage/auth_session_store.dart';
+import 'storage/local_auth_store.dart';
 import 'storage/user_profile_store.dart';
 
 const Color _sunOrange = Color(0xFFFF8F00);
@@ -193,7 +195,320 @@ class FitnessApp extends StatelessWidget {
           linearTrackColor: Color(0xFFFFE4B8),
         ),
       ),
-      home: const HomePage(),
+      home: const AuthGate(),
+    );
+  }
+}
+
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key, this.authStore = const LocalAuthStore()});
+
+  final LocalAuthStore authStore;
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  bool _isCheckingSession = true;
+  bool _isSignedIn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSession();
+  }
+
+  Future<void> _loadSession() async {
+    final userId = await widget.authStore.loadCurrentUserId();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isSignedIn = userId != null && userId.isNotEmpty;
+      _isCheckingSession = false;
+    });
+  }
+
+  void _enterApp() {
+    setState(() {
+      _isSignedIn = true;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isCheckingSession) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    if (_isSignedIn) {
+      return const HomePage();
+    }
+
+    return AuthPage(authStore: widget.authStore, onAuthenticated: _enterApp);
+  }
+}
+
+class AuthPage extends StatefulWidget {
+  const AuthPage({
+    super.key,
+    required this.authStore,
+    required this.onAuthenticated,
+  });
+
+  final LocalAuthStore authStore;
+  final VoidCallback onAuthenticated;
+
+  @override
+  State<AuthPage> createState() => _AuthPageState();
+}
+
+class _AuthPageState extends State<AuthPage> {
+  final _usernameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+
+  bool _isRegisterMode = false;
+  bool _isSubmitting = false;
+  String? _errorText;
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _isSubmitting = true;
+      _errorText = null;
+    });
+
+    try {
+      if (_isRegisterMode) {
+        final shouldAskMigration = await widget.authStore
+            .hasMigratableGuestData();
+        final user = await widget.authStore.register(
+          username: _usernameController.text,
+          email: _emailController.text,
+          password: _passwordController.text,
+        );
+        if (!mounted) {
+          return;
+        }
+        if (shouldAskMigration) {
+          final shouldMigrate = await _showGuestMigrationDialog();
+          if (shouldMigrate) {
+            await widget.authStore.migrateGuestDataToUser(user.userId);
+          }
+        }
+      } else {
+        await widget.authStore.login(
+          username: _usernameController.text,
+          password: _passwordController.text,
+        );
+      }
+
+      if (mounted) {
+        widget.onAuthenticated();
+      }
+    } on LocalAuthException catch (error) {
+      if (mounted) {
+        setState(() {
+          _errorText = error.message;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _errorText = '操作失败，请稍后重试';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
+    }
+  }
+
+  Future<bool> _showGuestMigrationDialog() async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('迁移游客数据'),
+          content: const Text('检测到您之前有使用过本 App，是否将现有数据迁移到新账号？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('否'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('是'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return result ?? false;
+  }
+
+  Future<void> _continueAsGuest() async {
+    await widget.authStore.continueAsGuest();
+    if (mounted) {
+      widget.onAuthenticated();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final title = _isRegisterMode ? '注册账号' : '登录账号';
+    final actionText = _isRegisterMode ? '注册并进入' : '登录';
+
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: DecoratedBox(
+                decoration: _sunnySurfaceDecoration(context, color: _sunIvory),
+                child: Padding(
+                  padding: const EdgeInsets.all(22),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        title,
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 18),
+                      _AuthTextField(
+                        controller: _usernameController,
+                        labelText: '账号',
+                        icon: Icons.person_outline_rounded,
+                      ),
+                      if (_isRegisterMode) ...[
+                        const SizedBox(height: 12),
+                        _AuthTextField(
+                          controller: _emailController,
+                          labelText: '邮箱',
+                          icon: Icons.mail_outline_rounded,
+                          keyboardType: TextInputType.emailAddress,
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      _AuthTextField(
+                        controller: _passwordController,
+                        labelText: '密码',
+                        icon: Icons.lock_outline_rounded,
+                        obscureText: true,
+                      ),
+                      if (_errorText != null) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          _errorText!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 18),
+                      FilledButton(
+                        onPressed: _isSubmitting ? null : _submit,
+                        child: _isSubmitting
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(actionText),
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton(
+                        onPressed: _isSubmitting ? null : _continueAsGuest,
+                        child: const Text('游客体验'),
+                      ),
+                      TextButton(
+                        onPressed: _isSubmitting
+                            ? null
+                            : () {
+                                setState(() {
+                                  _isRegisterMode = !_isRegisterMode;
+                                  _errorText = null;
+                                });
+                              },
+                        child: Text(_isRegisterMode ? '已有账号？去登录' : '没有账号？去注册'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AuthTextField extends StatelessWidget {
+  const _AuthTextField({
+    required this.controller,
+    required this.labelText,
+    required this.icon,
+    this.obscureText = false,
+    this.keyboardType,
+  });
+
+  final TextEditingController controller;
+  final String labelText;
+  final IconData icon;
+  final bool obscureText;
+  final TextInputType? keyboardType;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return TextField(
+      controller: controller,
+      obscureText: obscureText,
+      keyboardType: keyboardType,
+      decoration: InputDecoration(
+        labelText: labelText,
+        prefixIcon: Icon(icon),
+        filled: true,
+        fillColor: Colors.white.withValues(alpha: 0.86),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide(
+            color: colorScheme.outlineVariant.withValues(alpha: 0.6),
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide(color: colorScheme.primary, width: 1.4),
+        ),
+      ),
     );
   }
 }
@@ -348,15 +663,22 @@ class _HomePageState extends State<HomePage> {
     _refreshOverview();
   }
 
+  Future<String> _scopedPreferenceKey(String key) async {
+    final userId = await AuthSessionStore.effectiveUserId();
+    return AuthSessionStore.scopedKey(userId, key);
+  }
+
   Future<void> _loadPersistedWeightData() async {
     final preferences = await SharedPreferences.getInstance();
+    final targetWeightKey = await _scopedPreferenceKey(_targetWeightKey);
+    final weightEntriesKey = await _scopedPreferenceKey(_weightEntriesKey);
 
     double? targetWeight;
-    final storedTargetWeight = preferences.getDouble(_targetWeightKey);
+    final storedTargetWeight = preferences.getDouble(targetWeightKey);
     if (storedTargetWeight != null && storedTargetWeight > 0) {
       targetWeight = storedTargetWeight;
     } else {
-      final rawTargetWeight = preferences.getString(_targetWeightKey);
+      final rawTargetWeight = preferences.getString(targetWeightKey);
       final parsedTargetWeight = double.tryParse(rawTargetWeight ?? '');
       if (parsedTargetWeight != null && parsedTargetWeight > 0) {
         targetWeight = parsedTargetWeight;
@@ -364,7 +686,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     var loadedEntries = <WeightEntry>[];
-    final rawEntries = preferences.getString(_weightEntriesKey);
+    final rawEntries = preferences.getString(weightEntriesKey);
     if (rawEntries != null && rawEntries.isNotEmpty) {
       try {
         final decoded = jsonDecode(rawEntries);
@@ -374,7 +696,7 @@ class _HomePageState extends State<HomePage> {
                 ..sort((a, b) => a.date.compareTo(b.date));
         }
       } catch (_) {
-        await preferences.remove(_weightEntriesKey);
+        await preferences.remove(weightEntriesKey);
         loadedEntries = <WeightEntry>[];
       }
     }
@@ -399,17 +721,19 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _persistWeightData() async {
     final preferences = await SharedPreferences.getInstance();
+    final targetWeightKey = await _scopedPreferenceKey(_targetWeightKey);
+    final weightEntriesKey = await _scopedPreferenceKey(_weightEntriesKey);
 
     if (_targetWeightKg != null && _targetWeightKg! > 0) {
-      await preferences.setDouble(_targetWeightKey, _targetWeightKg!);
+      await preferences.setDouble(targetWeightKey, _targetWeightKg!);
     } else {
-      await preferences.remove(_targetWeightKey);
+      await preferences.remove(targetWeightKey);
     }
 
     final serializedEntries = jsonEncode(
       _weightEntries.map((entry) => entry.toMap()).toList(),
     );
-    await preferences.setString(_weightEntriesKey, serializedEntries);
+    await preferences.setString(weightEntriesKey, serializedEntries);
   }
 
   List<DateTime> _collectRecordedWeightMonths() {
@@ -4701,12 +5025,14 @@ class ProfilePage extends StatefulWidget {
     this.initialProfile = const UserProfile(),
     this.profileStore,
     this.imagePicker,
+    this.authStore = const LocalAuthStore(),
     this.onProfileChanged,
   });
 
   final UserProfile initialProfile;
   final UserProfileStore? profileStore;
   final ImagePicker? imagePicker;
+  final LocalAuthStore authStore;
   final ValueChanged<UserProfile>? onProfileChanged;
 
   @override
@@ -4720,10 +5046,12 @@ class _ProfilePageState extends State<ProfilePage> {
 
   late final UserProfileStore _profileStore;
   late final ImagePicker _imagePicker;
+  late final LocalAuthStore _authStore;
 
   late UserProfile _profile;
   bool _isLoading = true;
   bool _isSavingAvatar = false;
+  bool _isGuestUser = true;
 
   @override
   void initState() {
@@ -4732,24 +5060,29 @@ class _ProfilePageState extends State<ProfilePage> {
     _profileStore =
         widget.profileStore ?? SharedPreferencesUserProfileStore.instance;
     _imagePicker = widget.imagePicker ?? ImagePicker();
+    _authStore = widget.authStore;
     _initializeProfile();
   }
 
   Future<void> _initializeProfile() async {
     await _loadProfile();
-    if (!Platform.isAndroid) {
+    if (!_isGuestUser && !Platform.isAndroid) {
       await _recoverLostAvatarPick();
     }
   }
 
   Future<void> _loadProfile() async {
     try {
-      final profile = await _loadProfileWithValidAvatar();
+      final isGuestUser = await _authStore.isGuestSession();
+      final profile = await _loadProfileWithValidAvatar(
+        isGuestUser: isGuestUser,
+      );
       if (!mounted) {
         return;
       }
       setState(() {
         _profile = profile;
+        _isGuestUser = isGuestUser;
         _isLoading = false;
       });
     } catch (_) {
@@ -4764,8 +5097,25 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  Future<UserProfile> _loadProfileWithValidAvatar() async {
-    final profile = await _profileStore.loadProfile();
+  Future<UserProfile> _loadProfileWithValidAvatar({
+    required bool isGuestUser,
+  }) async {
+    if (isGuestUser) {
+      return const UserProfile();
+    }
+
+    final currentUser = await _authStore.loadCurrentUser();
+    var profile = await _profileStore.loadProfile();
+    if (profile.nickname.trim().isEmpty &&
+        currentUser != null &&
+        currentUser.username.trim().isNotEmpty) {
+      profile = profile.copyWith(nickname: currentUser.username);
+    }
+    if ((profile.avatarPath == null || profile.avatarPath!.trim().isEmpty) &&
+        currentUser?.avatarPath != null &&
+        currentUser!.avatarPath!.trim().isNotEmpty) {
+      profile = profile.copyWith(avatarPath: currentUser.avatarPath);
+    }
     final avatarPath = profile.avatarPath?.trim();
     if (avatarPath == null || avatarPath.isEmpty) {
       return profile;
@@ -4831,6 +5181,10 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _handleAvatarTap() async {
     if (_isLoading || _isSavingAvatar) {
+      return;
+    }
+    if (_isGuestUser) {
+      _showProfileMessage('游客模式下请先注册或登录后设置头像');
       return;
     }
 
@@ -4906,6 +5260,7 @@ class _ProfilePageState extends State<ProfilePage> {
     }
 
     final updatedProfile = await _profileStore.saveAvatarPath(storedPath);
+    await _authStore.updateCurrentAvatarPath(storedPath);
     if (!mounted) {
       return;
     }
@@ -5013,12 +5368,12 @@ class _ProfilePageState extends State<ProfilePage> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('编辑昵称'),
+          title: const Text('编辑用户名'),
           content: TextField(
             controller: controller,
             autofocus: true,
             maxLength: 20,
-            decoration: const InputDecoration(hintText: '请输入昵称'),
+            decoration: const InputDecoration(hintText: '请输入用户名'),
           ),
           actions: [
             TextButton(
@@ -5056,8 +5411,13 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  // ignore: unused_element
   Future<void> _openNicknameEditor() async {
     if (_isLoading) {
+      return;
+    }
+    if (_isGuestUser) {
+      _showProfileMessage('游客模式不能修改用户名');
       return;
     }
 
@@ -5086,6 +5446,45 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  Future<void> _openUsernameEditor() async {
+    if (_isLoading) {
+      return;
+    }
+    if (_isGuestUser) {
+      _showProfileMessage('游客模式不能修改用户名');
+      return;
+    }
+
+    final username = await showDialog<String>(
+      context: context,
+      builder: (context) =>
+          _NicknameEditDialog(initialNickname: _profile.nickname),
+    );
+
+    if (username == null) {
+      return;
+    }
+
+    try {
+      final updatedUser = await _authStore.updateCurrentUsername(username);
+      final updatedProfile = await _profileStore.saveNickname(
+        updatedUser.username,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _profile = updatedProfile.copyWith(nickname: updatedUser.username);
+      });
+      widget.onProfileChanged?.call(_profile);
+      _showProfileMessage('用户名已更新');
+    } on LocalAuthException catch (error) {
+      _showProfileMessage(error.message);
+    } catch (_) {
+      _showProfileMessage('保存用户名失败，请稍后重试');
+    }
+  }
+
   Future<void> _openPersonalInfoPage() async {
     if (_isLoading) {
       return;
@@ -5110,6 +5509,12 @@ class _ProfilePageState extends State<ProfilePage> {
     widget.onProfileChanged?.call(updatedProfile);
   }
 
+  Future<void> _openSettingsPage() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(builder: (_) => SettingsPage(authStore: _authStore)),
+    );
+  }
+
   void _showProfileMessage(String message) {
     if (!mounted) {
       return;
@@ -5130,16 +5535,154 @@ class _ProfilePageState extends State<ProfilePage> {
             profile: _profile,
             isLoading: _isLoading,
             isSavingAvatar: _isSavingAvatar,
+            isGuestUser: _isGuestUser,
             onAvatarTap: _handleAvatarTap,
-            onNicknameTap: _openNicknameEditor,
+            onNicknameTap: _openUsernameEditor,
           ),
           const SizedBox(height: 16),
           _ProfileStatsCard(
             profile: _profile,
             onTap: _isLoading ? null : _openPersonalInfoPage,
           ),
+          const SizedBox(height: 16),
+          _ProfileSettingsCard(onTap: _openSettingsPage),
         ],
       ),
+    );
+  }
+}
+
+class SettingsPage extends StatelessWidget {
+  const SettingsPage({super.key, this.authStore = const LocalAuthStore()});
+
+  final LocalAuthStore authStore;
+
+  Future<void> _confirmLogout(BuildContext context) async {
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('退出登录'),
+          content: const Text('确定退出登录吗？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('确认'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldLogout != true || !context.mounted) {
+      return;
+    }
+
+    await authStore.logout();
+    if (!context.mounted) {
+      return;
+    }
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AuthGate()),
+      (route) => false,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('设置')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            Card(
+              color: _sunIvory,
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: InkWell(
+                onTap: () => _confirmLogout(context),
+                borderRadius: BorderRadius.circular(24),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                  child: _SettingsListRow(
+                    icon: Icons.logout_rounded,
+                    label: '退出登录',
+                    showChevron: false,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfileSettingsCard extends StatelessWidget {
+  const _ProfileSettingsCard({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: _sunIvory,
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(32)),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(32),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+          child: _SettingsListRow(icon: Icons.settings_outlined, label: '设置'),
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsListRow extends StatelessWidget {
+  const _SettingsListRow({
+    required this.icon,
+    required this.label,
+    this.showChevron = true,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool showChevron;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Row(
+      children: [
+        Icon(icon, color: colorScheme.primary),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            label,
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ),
+        if (showChevron)
+          Icon(
+            Icons.chevron_right_rounded,
+            color: colorScheme.onSurfaceVariant,
+          ),
+      ],
     );
   }
 }
@@ -5149,6 +5692,7 @@ class _ProfileHeaderCard extends StatelessWidget {
     required this.profile,
     required this.isLoading,
     required this.isSavingAvatar,
+    required this.isGuestUser,
     required this.onAvatarTap,
     required this.onNicknameTap,
   });
@@ -5156,6 +5700,7 @@ class _ProfileHeaderCard extends StatelessWidget {
   final UserProfile profile;
   final bool isLoading;
   final bool isSavingAvatar;
+  final bool isGuestUser;
   final VoidCallback onAvatarTap;
   final VoidCallback onNicknameTap;
 
@@ -5224,7 +5769,7 @@ class _ProfileHeaderCard extends StatelessWidget {
             const SizedBox(width: 16),
             Expanded(
               child: InkWell(
-                onTap: isLoading ? null : onNicknameTap,
+                onTap: isLoading || isGuestUser ? null : onNicknameTap,
                 borderRadius: BorderRadius.circular(18),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
@@ -5245,11 +5790,12 @@ class _ProfileHeaderCard extends StatelessWidget {
                               ),
                         ),
                       ),
-                      Icon(
-                        Icons.edit_outlined,
-                        size: 20,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
+                      if (!isGuestUser)
+                        Icon(
+                          Icons.edit_outlined,
+                          size: 20,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
                     ],
                   ),
                 ),
@@ -5554,12 +6100,12 @@ class _NicknameEditDialogState extends State<_NicknameEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('编辑昵称'),
+      title: const Text('编辑用户名'),
       content: TextField(
         controller: _controller,
         autofocus: true,
         maxLength: 20,
-        decoration: const InputDecoration(hintText: '请输入昵称'),
+        decoration: const InputDecoration(hintText: '请输入用户名'),
       ),
       actions: [
         TextButton(

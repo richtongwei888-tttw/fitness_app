@@ -4,8 +4,10 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/diet_record.dart';
 import '../models/food_template.dart';
+import '../models/local_user.dart';
 import '../models/meal_food_record.dart';
 import '../models/training_record.dart';
+import '../storage/auth_session_store.dart';
 
 class DatabaseService {
   static Database? _database;
@@ -14,6 +16,7 @@ class DatabaseService {
   static const String _trainingTable = 'training_records';
   static const String _dietTable = 'diet_records';
   static const String _foodTemplateTable = 'food_templates';
+  static const String _userTable = 'users';
 
   static Future<Database> get database async {
     if (_database != null) {
@@ -39,7 +42,7 @@ class DatabaseService {
 
     return openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _createTables,
       onUpgrade: _upgradeDatabase,
     );
@@ -47,8 +50,20 @@ class DatabaseService {
 
   static Future<void> _createTables(Database db, int version) async {
     await db.execute('''
+      CREATE TABLE $_userTable (
+        userId TEXT PRIMARY KEY,
+        username TEXT NOT NULL UNIQUE,
+        email TEXT NOT NULL,
+        password TEXT NOT NULL,
+        avatarPath TEXT,
+        createdAt TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
       CREATE TABLE $_trainingTable (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId TEXT NOT NULL DEFAULT '${AuthSessionStore.guestUserId}',
         date TEXT NOT NULL,
         muscleGroups TEXT NOT NULL,
         isAerobic INTEGER NOT NULL,
@@ -61,6 +76,7 @@ class DatabaseService {
     await db.execute('''
       CREATE TABLE $_dietTable (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId TEXT NOT NULL DEFAULT '${AuthSessionStore.guestUserId}',
         date TEXT NOT NULL,
         mealType TEXT NOT NULL,
         mealIndex INTEGER NOT NULL,
@@ -88,6 +104,7 @@ class DatabaseService {
     await db.execute('''
       CREATE TABLE $_foodTemplateTable (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId TEXT NOT NULL DEFAULT '${AuthSessionStore.guestUserId}',
         name TEXT NOT NULL,
         unitType TEXT NOT NULL,
         carbs REAL NOT NULL,
@@ -111,8 +128,54 @@ class DatabaseService {
   }
 
   static Future<void> _ensureAppSchema(Database db) async {
+    await _ensureUserSchema(db);
+    await _ensureUserIdColumn(db, _trainingTable);
+    await _ensureUserIdColumn(db, _dietTable);
+    await _ensureUserIdColumn(db, _foodTemplateTable);
     await _ensureDietSchema(db);
     await _ensureFoodTemplateSchema(db);
+  }
+
+  static Future<void> _ensureUserSchema(Database db) async {
+    final existingTable = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      [_userTable],
+    );
+
+    if (existingTable.isEmpty) {
+      await db.execute('''
+        CREATE TABLE $_userTable (
+          userId TEXT PRIMARY KEY,
+          username TEXT NOT NULL UNIQUE,
+          email TEXT NOT NULL,
+          password TEXT NOT NULL,
+          avatarPath TEXT,
+          createdAt TEXT NOT NULL
+        )
+      ''');
+    }
+  }
+
+  static Future<void> _ensureUserIdColumn(Database db, String table) async {
+    final existingTable = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      [table],
+    );
+    if (existingTable.isEmpty) {
+      return;
+    }
+
+    final tableInfo = await db.rawQuery('PRAGMA table_info($table)');
+    final columns = tableInfo
+        .map((column) => column['name'] as String? ?? '')
+        .where((name) => name.isNotEmpty)
+        .toSet();
+
+    if (!columns.contains('userId')) {
+      await db.execute(
+        "ALTER TABLE $table ADD COLUMN userId TEXT NOT NULL DEFAULT '${AuthSessionStore.guestUserId}'",
+      );
+    }
   }
 
   static Future<void> _ensureDietSchema(Database db) async {
@@ -217,6 +280,7 @@ class DatabaseService {
       await db.execute('''
         CREATE TABLE $_foodTemplateTable (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          userId TEXT NOT NULL DEFAULT '${AuthSessionStore.guestUserId}',
           name TEXT NOT NULL,
           unitType TEXT NOT NULL,
           carbs REAL NOT NULL,
@@ -226,6 +290,8 @@ class DatabaseService {
         )
       ''');
     }
+
+    await _ensureUserIdColumn(db, _foodTemplateTable);
   }
 
   static Future<void> _backfillDietMealColumns(Database db) async {
@@ -420,19 +486,140 @@ class DatabaseService {
     return int.tryParse(match.group(1) ?? '');
   }
 
+  static Future<String> _currentUserId() {
+    return AuthSessionStore.effectiveUserId();
+  }
+
+  static Map<String, dynamic> _withUserId(
+    Map<String, dynamic> values,
+    String userId,
+  ) {
+    return <String, dynamic>{...values, 'userId': userId};
+  }
+
+  static Future<LocalUser?> getUserByUsername(String username) async {
+    final db = await database;
+    final maps = await db.query(
+      _userTable,
+      where: 'LOWER(username) = ?',
+      whereArgs: [username.trim().toLowerCase()],
+      limit: 1,
+    );
+    if (maps.isEmpty) {
+      return null;
+    }
+    return LocalUser.fromMap(maps.first);
+  }
+
+  static Future<LocalUser?> getUserById(String userId) async {
+    final db = await database;
+    final maps = await db.query(
+      _userTable,
+      where: 'userId = ?',
+      whereArgs: [userId],
+      limit: 1,
+    );
+    if (maps.isEmpty) {
+      return null;
+    }
+    return LocalUser.fromMap(maps.first);
+  }
+
+  static Future<void> addUser(LocalUser user) async {
+    final db = await database;
+    await db.insert(_userTable, user.toMap());
+  }
+
+  static Future<void> updateUser(LocalUser user) async {
+    final db = await database;
+    await db.update(
+      _userTable,
+      user.toMap(),
+      where: 'userId = ?',
+      whereArgs: [user.userId],
+    );
+  }
+
+  static Future<bool> hasGuestBusinessData() async {
+    final db = await database;
+    final guestId = AuthSessionStore.guestUserId;
+    for (final table in <String>[
+      _trainingTable,
+      _dietTable,
+      _foodTemplateTable,
+    ]) {
+      final result = await db.rawQuery(
+        'SELECT COUNT(*) AS count FROM $table WHERE userId = ?',
+        [guestId],
+      );
+      final count = (result.first['count'] as num?)?.toInt() ?? 0;
+      if (count > 0) {
+        return true;
+      }
+    }
+
+    return AuthSessionStore.hasLegacyGuestPreferences();
+  }
+
+  static Future<void> copyGuestDataToUser(String userId) async {
+    final alreadyMigrated = await AuthSessionStore.isGuestDataMigratedTo(
+      userId,
+    );
+    if (alreadyMigrated) {
+      return;
+    }
+
+    final db = await database;
+    final guestId = AuthSessionStore.guestUserId;
+    await db.transaction((txn) async {
+      for (final table in <String>[
+        _trainingTable,
+        _dietTable,
+        _foodTemplateTable,
+      ]) {
+        final rows = await txn.query(
+          table,
+          where: 'userId = ?',
+          whereArgs: [guestId],
+        );
+        for (final row in rows) {
+          final copy = Map<String, dynamic>.of(row)
+            ..remove('id')
+            ..['userId'] = userId;
+          await txn.insert(table, copy);
+        }
+      }
+    });
+
+    await AuthSessionStore.copyLegacyGuestPreferencesToUser(userId);
+    final migratedAvatarPath = await AuthSessionStore.loadScopedString(
+      userId,
+      'profile_avatar_path',
+    );
+    if (migratedAvatarPath != null && migratedAvatarPath.isNotEmpty) {
+      final user = await getUserById(userId);
+      if (user != null) {
+        await updateUser(user.copyWith(avatarPath: migratedAvatarPath));
+      }
+    }
+    await AuthSessionStore.markGuestDataMigratedTo(userId);
+  }
+
   static Future<int> addTrainingRecord(TrainingRecord record) async {
     final db = await database;
-    return db.insert(_trainingTable, record.toMap());
+    final userId = await _currentUserId();
+    return db.insert(_trainingTable, _withUserId(record.toMap(), userId));
   }
 
   static Future<List<TrainingRecord>> getTrainingRecordsByDate(
     String date,
   ) async {
     final db = await database;
+    final userId = await _currentUserId();
     final maps = await db.query(
       _trainingTable,
-      where: 'date = ?',
-      whereArgs: [date],
+      where: 'userId = ? AND date = ?',
+      whereArgs: [userId, date],
       orderBy: 'createdAt DESC',
     );
     return List.generate(maps.length, (i) => TrainingRecord.fromMap(maps[i]));
@@ -442,10 +629,11 @@ class DatabaseService {
     String date,
   ) async {
     final db = await database;
+    final userId = await _currentUserId();
     final maps = await db.query(
       _trainingTable,
-      where: 'date = ?',
-      whereArgs: [date],
+      where: 'userId = ? AND date = ?',
+      whereArgs: [userId, date],
       orderBy: 'createdAt DESC, id DESC',
       limit: 1,
     );
@@ -462,10 +650,11 @@ class DatabaseService {
     String endDate,
   ) async {
     final db = await database;
+    final userId = await _currentUserId();
     final maps = await db.query(
       _trainingTable,
-      where: 'date BETWEEN ? AND ?',
-      whereArgs: [startDate, endDate],
+      where: 'userId = ? AND date BETWEEN ? AND ?',
+      whereArgs: [userId, startDate, endDate],
       orderBy: 'date DESC, createdAt DESC',
     );
     return List.generate(maps.length, (i) => TrainingRecord.fromMap(maps[i]));
@@ -473,8 +662,11 @@ class DatabaseService {
 
   static Future<List<TrainingRecord>> getAllTrainingRecords() async {
     final db = await database;
+    final userId = await _currentUserId();
     final maps = await db.query(
       _trainingTable,
+      where: 'userId = ?',
+      whereArgs: [userId],
       orderBy: 'date DESC, createdAt DESC',
     );
     return List.generate(maps.length, (i) => TrainingRecord.fromMap(maps[i]));
@@ -482,11 +674,12 @@ class DatabaseService {
 
   static Future<int> updateTrainingRecord(TrainingRecord record) async {
     final db = await database;
+    final userId = await _currentUserId();
     return db.update(
       _trainingTable,
-      record.toMap(),
-      where: 'id = ?',
-      whereArgs: [record.id],
+      _withUserId(record.toMap(), userId),
+      where: 'id = ? AND userId = ?',
+      whereArgs: [record.id, userId],
     );
   }
 
@@ -512,28 +705,43 @@ class DatabaseService {
 
   static Future<int> deleteTrainingRecord(int id) async {
     final db = await database;
-    return db.delete(_trainingTable, where: 'id = ?', whereArgs: [id]);
+    final userId = await _currentUserId();
+    return db.delete(
+      _trainingTable,
+      where: 'id = ? AND userId = ?',
+      whereArgs: [id, userId],
+    );
   }
 
   static Future<int> addDietRecord(DietRecord record) async {
     final db = await database;
-    return db.insert(_dietTable, record.toMap());
+    final userId = await _currentUserId();
+    return db.insert(_dietTable, _withUserId(record.toMap(), userId));
   }
 
   static Future<int> addFoodTemplate(FoodTemplate template) async {
     final db = await database;
-    return db.insert(_foodTemplateTable, template.toMap());
+    final userId = await _currentUserId();
+    return db.insert(_foodTemplateTable, _withUserId(template.toMap(), userId));
   }
 
   static Future<int> deleteFoodTemplate(int id) async {
     final db = await database;
-    return db.delete(_foodTemplateTable, where: 'id = ?', whereArgs: [id]);
+    final userId = await _currentUserId();
+    return db.delete(
+      _foodTemplateTable,
+      where: 'id = ? AND userId = ?',
+      whereArgs: [id, userId],
+    );
   }
 
   static Future<List<FoodTemplate>> getAllFoodTemplates() async {
     final db = await database;
+    final userId = await _currentUserId();
     final maps = await db.query(
       _foodTemplateTable,
+      where: 'userId = ?',
+      whereArgs: [userId],
       orderBy: 'createdAt DESC, id DESC',
     );
     return List.generate(maps.length, (i) => FoodTemplate.fromMap(maps[i]));
@@ -541,32 +749,40 @@ class DatabaseService {
 
   static Future<int> addMealFoodRecord(MealFoodRecord record) async {
     final db = await database;
-    return db.insert(_dietTable, record.toMap());
+    final userId = await _currentUserId();
+    return db.insert(_dietTable, _withUserId(record.toMap(), userId));
   }
 
   static Future<int> updateMealFoodRecord(MealFoodRecord record) async {
     final db = await database;
+    final userId = await _currentUserId();
     return db.update(
       _dietTable,
-      record.toMap(),
-      where: 'id = ?',
-      whereArgs: [record.id],
+      _withUserId(record.toMap(), userId),
+      where: 'id = ? AND userId = ?',
+      whereArgs: [record.id, userId],
     );
   }
 
   static Future<int> deleteMealFoodRecord(int id) async {
     final db = await database;
-    return db.delete(_dietTable, where: 'id = ?', whereArgs: [id]);
+    final userId = await _currentUserId();
+    return db.delete(
+      _dietTable,
+      where: 'id = ? AND userId = ?',
+      whereArgs: [id, userId],
+    );
   }
 
   static Future<List<MealFoodRecord>> getMealFoodRecordsByDate(
     String dateKey,
   ) async {
     final db = await database;
+    final userId = await _currentUserId();
     final maps = await db.query(
       _dietTable,
-      where: 'date = ?',
-      whereArgs: [dateKey],
+      where: 'userId = ? AND date = ?',
+      whereArgs: [userId, dateKey],
       orderBy: 'mealIndex ASC, createdAt ASC, id ASC',
     );
     return List.generate(maps.length, (i) => MealFoodRecord.fromMap(maps[i]));
@@ -574,10 +790,11 @@ class DatabaseService {
 
   static Future<List<DietRecord>> getDietRecordsByDate(String date) async {
     final db = await database;
+    final userId = await _currentUserId();
     final maps = await db.query(
       _dietTable,
-      where: 'date = ?',
-      whereArgs: [date],
+      where: 'userId = ? AND date = ?',
+      whereArgs: [userId, date],
       orderBy: 'mealIndex ASC, createdAt ASC, id ASC',
     );
     return List.generate(maps.length, (i) => DietRecord.fromMap(maps[i]));
@@ -588,10 +805,11 @@ class DatabaseService {
     String endDate,
   ) async {
     final db = await database;
+    final userId = await _currentUserId();
     final maps = await db.query(
       _dietTable,
-      where: 'date BETWEEN ? AND ?',
-      whereArgs: [startDate, endDate],
+      where: 'userId = ? AND date BETWEEN ? AND ?',
+      whereArgs: [userId, startDate, endDate],
       orderBy: 'date DESC, mealIndex ASC, createdAt ASC, id ASC',
     );
     return List.generate(maps.length, (i) => DietRecord.fromMap(maps[i]));
@@ -599,8 +817,11 @@ class DatabaseService {
 
   static Future<List<DietRecord>> getAllDietRecords() async {
     final db = await database;
+    final userId = await _currentUserId();
     final maps = await db.query(
       _dietTable,
+      where: 'userId = ?',
+      whereArgs: [userId],
       orderBy: 'date DESC, mealIndex ASC, createdAt ASC, id ASC',
     );
     return List.generate(maps.length, (i) => DietRecord.fromMap(maps[i]));
@@ -608,36 +829,44 @@ class DatabaseService {
 
   static Future<double> getTotalCaloriesByDate(String date) async {
     final db = await database;
+    final userId = await _currentUserId();
     final result = await db.rawQuery(
-      'SELECT SUM(calories) as total FROM $_dietTable WHERE date = ?',
-      [date],
+      'SELECT SUM(calories) as total FROM $_dietTable WHERE userId = ? AND date = ?',
+      [userId, date],
     );
     return (result.first['total'] as num?)?.toDouble() ?? 0.0;
   }
 
   static Future<int> updateDietRecord(DietRecord record) async {
     final db = await database;
+    final userId = await _currentUserId();
     return db.update(
       _dietTable,
-      record.toMap(),
-      where: 'id = ?',
-      whereArgs: [record.id],
+      _withUserId(record.toMap(), userId),
+      where: 'id = ? AND userId = ?',
+      whereArgs: [record.id, userId],
     );
   }
 
   static Future<int> deleteDietRecord(int id) async {
     final db = await database;
-    return db.delete(_dietTable, where: 'id = ?', whereArgs: [id]);
+    final userId = await _currentUserId();
+    return db.delete(
+      _dietTable,
+      where: 'id = ? AND userId = ?',
+      whereArgs: [id, userId],
+    );
   }
 
   static Future<void> resequenceDietRecordsByDate(String date) async {
     final db = await database;
+    final userId = await _currentUserId();
     await db.transaction((txn) async {
       final records = await txn.query(
         _dietTable,
         columns: ['id', 'mealIndex', 'mealLabel', 'mealType'],
-        where: 'date = ?',
-        whereArgs: [date],
+        where: 'userId = ? AND date = ?',
+        whereArgs: [userId, date],
         orderBy: 'mealIndex ASC, createdAt ASC, id ASC',
       );
 
@@ -675,8 +904,8 @@ class DatabaseService {
             'mealLabel': resolvedMealLabel,
             'mealType': resolvedMealType,
           },
-          where: 'id = ?',
-          whereArgs: [record['id']],
+          where: 'id = ? AND userId = ?',
+          whereArgs: [record['id'], userId],
         );
       }
       if (needsCommit) {
