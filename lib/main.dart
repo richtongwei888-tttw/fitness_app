@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'database/database_service.dart';
@@ -24,6 +23,7 @@ import 'models/training_record.dart';
 import 'models/user_profile.dart';
 import 'services/nutrition_target_calculator.dart';
 import 'storage/auth_session_store.dart';
+import 'storage/avatar_file_store.dart';
 import 'storage/local_auth_store.dart';
 import 'storage/user_profile_store.dart';
 
@@ -5049,6 +5049,7 @@ class _ProfilePageState extends State<ProfilePage> {
   late final LocalAuthStore _authStore;
 
   late UserProfile _profile;
+  String? _lastPersistedAvatarPath;
   bool _isLoading = true;
   bool _isSavingAvatar = false;
   bool _isGuestUser = true;
@@ -5082,6 +5083,7 @@ class _ProfilePageState extends State<ProfilePage> {
       }
       setState(() {
         _profile = profile;
+        _lastPersistedAvatarPath = profile.avatarPath;
         _isGuestUser = isGuestUser;
         _isLoading = false;
       });
@@ -5114,7 +5116,11 @@ class _ProfilePageState extends State<ProfilePage> {
     if ((profile.avatarPath == null || profile.avatarPath!.trim().isEmpty) &&
         currentUser?.avatarPath != null &&
         currentUser!.avatarPath!.trim().isNotEmpty) {
-      profile = profile.copyWith(avatarPath: currentUser.avatarPath);
+      profile = profile.copyWith(
+        avatarPath: await AvatarFileStore.resolveStoredPath(
+          currentUser.avatarPath,
+        ),
+      );
     }
     final avatarPath = profile.avatarPath?.trim();
     if (avatarPath == null || avatarPath.isEmpty) {
@@ -5130,7 +5136,9 @@ class _ProfilePageState extends State<ProfilePage> {
       // Invalid or unreadable local paths are treated as stale avatars.
     }
 
-    return _profileStore.saveAvatarPath(null);
+    final clearedProfile = await _profileStore.saveAvatarPath(null);
+    await _authStore.updateCurrentAvatarPath(null);
+    return clearedProfile;
   }
 
   Future<void> _recoverLostAvatarPick() async {
@@ -5254,7 +5262,10 @@ class _ProfilePageState extends State<ProfilePage> {
     XFile pickedFile, {
     required String successMessage,
   }) async {
-    final storedPath = await _persistAvatar(pickedFile);
+    final storedPath = await _persistAvatar(
+      pickedFile,
+      previousAvatarPath: _lastPersistedAvatarPath,
+    );
     if (storedPath.trim().isEmpty) {
       throw const FileSystemException('Avatar path is empty.');
     }
@@ -5266,16 +5277,17 @@ class _ProfilePageState extends State<ProfilePage> {
     }
     setState(() {
       _profile = updatedProfile;
+      _lastPersistedAvatarPath = updatedProfile.avatarPath;
     });
     widget.onProfileChanged?.call(updatedProfile);
     _showProfileMessage(successMessage);
   }
 
-  Future<String> _persistAvatar(XFile pickedFile) async {
-    final appDirectory = await getApplicationDocumentsDirectory();
-    final avatarDirectory = Directory(
-      p.join(appDirectory.path, 'profile_assets'),
-    );
+  Future<String> _persistAvatar(
+    XFile pickedFile, {
+    required String? previousAvatarPath,
+  }) async {
+    final avatarDirectory = await AvatarFileStore.managedDirectory();
     if (!await avatarDirectory.exists()) {
       await avatarDirectory.create(recursive: true);
     }
@@ -5293,7 +5305,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
     final savedFile = File(targetPath);
     await savedFile.writeAsBytes(bytes, flush: true);
-    final previousPath = _profile.avatarPath;
+    final previousPath = previousAvatarPath;
     if (previousPath != null &&
         previousPath.isNotEmpty &&
         previousPath != savedFile.path) {

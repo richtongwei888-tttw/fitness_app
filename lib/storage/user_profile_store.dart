@@ -1,6 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/user_profile.dart';
+import 'avatar_file_store.dart';
 import 'auth_session_store.dart';
 
 abstract class UserProfileStore {
@@ -44,7 +45,9 @@ class SharedPreferencesUserProfileStore implements UserProfileStore {
     final heightCmKey = await _key(_heightCmKey);
     return UserProfile(
       nickname: preferences.getString(nicknameKey) ?? '',
-      avatarPath: preferences.getString(avatarPathKey),
+      avatarPath: await AvatarFileStore.resolveStoredPath(
+        preferences.getString(avatarPathKey),
+      ),
       gender: userGenderFromStorage(preferences.getString(genderKey)),
       age: preferences.getInt(ageKey),
       heightCm: preferences.getDouble(heightCmKey),
@@ -66,13 +69,12 @@ class SharedPreferencesUserProfileStore implements UserProfileStore {
     if (avatarPath == null || avatarPath.isEmpty) {
       await preferences.remove(avatarPathKey);
     } else {
-      await preferences.setString(avatarPathKey, avatarPath);
+      await preferences.setString(
+        avatarPathKey,
+        await AvatarFileStore.storablePathFor(avatarPath),
+      );
     }
-    final current = await loadProfile();
-    return current.copyWith(
-      avatarPath: avatarPath == null || avatarPath.isEmpty ? null : avatarPath,
-      clearAvatar: avatarPath == null || avatarPath.isEmpty,
-    );
+    return loadProfile();
   }
 
   @override

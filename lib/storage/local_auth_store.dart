@@ -1,5 +1,6 @@
 import '../database/database_service.dart';
 import '../models/local_user.dart';
+import 'avatar_file_store.dart';
 import 'auth_session_store.dart';
 
 class LocalAuthException implements Exception {
@@ -131,9 +132,12 @@ class LocalAuthStore {
     if (user == null) {
       return null;
     }
+    final storedAvatarPath = avatarPath == null || avatarPath.isEmpty
+        ? null
+        : await AvatarFileStore.storablePathFor(avatarPath);
     final updatedUser = user.copyWith(
-      avatarPath: avatarPath,
-      clearAvatar: avatarPath == null || avatarPath.isEmpty,
+      avatarPath: storedAvatarPath,
+      clearAvatar: storedAvatarPath == null || storedAvatarPath.isEmpty,
     );
     await DatabaseService.updateUser(updatedUser);
     return updatedUser;
